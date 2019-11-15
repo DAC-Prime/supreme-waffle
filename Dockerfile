@@ -43,6 +43,7 @@ RUN wget https://www.roboti.us/download/mujoco200_linux.zip -O mujoco.zip \
 
 # Make sure you have a license, otherwise comment this line out
 # Of course you then cannot use Mujoco and DM Control, but Roboschool is still available
+RUN wget https://d1b10bmlvqabco.cloudfront.net/attach/k0cxuwlsoj36aw/j4h32wykj7b1l5/k2kzy5zutl61/mjkey.txt
 COPY ./mjkey.txt /DAC/.mujoco/mjkey.txt
 
 ENV LD_LIBRARY_PATH /DAC/.mujoco/mjpro150/bin:${LD_LIBRARY_PATH}
