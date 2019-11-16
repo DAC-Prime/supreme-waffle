@@ -9,19 +9,19 @@ class NormalizedEnv(gym.Wrapper):
         self.env = env_fn()
         self.action_space = self.env.action_space
         self.observation_space = self.env.observation_space
-        self.runing_ms = RunningMeanStd()
+        self.running_mean_std = RunningMeanStd()
         self.count = count
         self.clip = clip
 
     def reset(self):
         return self.env.reset()
 
-    def step(action):
+    def step(self, action):
         obs, reward, done, info = self.env.step(action)
 
         obs = np.asarray(obs)
         self.running_mean_std.update(obs)
-        obs = np.clip((x - self.running_mean_std.mean) / np.sqrt(self.running_mean_std.var + self.epsilon),
+        obs = np.clip((obs - self.running_mean_std.mean) / np.sqrt(self.running_mean_std.var + self.count),
                        -self.clip, self.clip)
         return obs, reward, done, info
 
