@@ -53,4 +53,5 @@ COPY requirements.txt requirements.txt
 RUN pip install -r requirements.txt
 RUN pip install git+git://github.com/openai/baselines.git@8e56dd#egg=baselines
 
-WORKDIR /DAC/DeepRL
+COPY dac/ /DAC/dac/
+#WORKDIR /DAC/dac
