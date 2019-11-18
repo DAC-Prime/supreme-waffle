@@ -14,14 +14,33 @@ def tensor(x):
     return x
 
 
-class OptionNetwork(nn.Module):
+class MasterNetwork(nn.Module):
+    def __init__(self, obs_dim, num_options):
+        super(MasterNetwork, self).__init__()
+
+        self.master_policy_net = FCNetwork(obs_dim, num_options, lambda: nn.Softmax(dim=-1))
+        self.value_net = FCNetwork(obs_dim, num_options)
+
+    def forward(self, x):
+        policy_option = self.master_policy_net(x)
+        q_option = self.value_net(x)
+
+        return {
+            "policy_option": policy_option,
+            "q_option": q_option,
+        }
+
+
+class LowerNetwork(nn.Module):
     def __init__(self, obs_dim, action_dim):
-        self.action_net = FCNetwork(obs_dim, action_dim, nn.Tanh)
+        super(LowerNetwork, self).__init__()
+
+        self.policy_net = FCNetwork(obs_dim, action_dim, nn.Tanh)
         self.termination_net = FCNetwork(obs_dim, 1, nn.Sigmoid)
         self.std = nn.Parameter(torch.zeros((1, action_dim)))
 
     def forward(self, x):
-        mean_action = self.action_net(x)
+        mean_action = self.policy_net(x)
         std_action = F.softplus(self.std).expand(mean_action.size(0), -1) # ?
         termination_prob = self.termination_net(x)
 
