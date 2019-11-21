@@ -8,8 +8,8 @@
 
 #SBATCH --time=100:00:00
 #SBATCH --nodes=1
-#SBATCH --tasks-per-node=20
-#SBATCH -J PPO
+#SBATCH --tasks-per-node=2
+#SBATCH -J PPO_9_Swimmer-v2
 #SBATCH --mem=24G
 
 # RUNNING CPU(skylake>broadwell>haswell>ivy>sandy)
@@ -19,7 +19,7 @@
 module list
 
 # run command
-python ppo.py
+python ppo.py -e 'Swimmer-v2'
 
 # deal the data file
 

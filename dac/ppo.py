@@ -1,7 +1,10 @@
 ## Based on the implementation of PPO in https://github.com/higgsfield/RL-Adventure-2/blob/master/3.ppo.ipynb
 from network import *
 from env.env import *
-
+import random
+import datetime
+import os
+import ast
 
 def init_weights(m):
     if isinstance(m, nn.Linear):
@@ -123,11 +126,12 @@ class ppo_agent():
         test_rewards = []
         state = self.envs.reset()
         cumu_rewd = np.zeros(self.num_envs)
+        path='./data/{}'.format(self.env_name)
         try:
-            os.mkdir('data')
+            os.mkdir(path)
         except OSError as error:
             print(error)
-        fd = open('./data/{}_ppo.log'.format(self.env_name), 'w')
+        fd = open(path + '/ppo_{}_{:03d}.log'.format(datetime.datetime.now().strftime("%Y%m%d%H%M%S"), random.randint(1,99)), 'w')
         while frame_idx < self.max_frames:
             log_probs = []
             values = []
@@ -185,6 +189,8 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Run PPO on a specific game.')
     parser.add_argument('-e', '--env_name', type=str, help='Name of the game', default='HalfCheetah-v2')
+    parser.add_argument('-n', '--num_envs', type=int, help='Number of envs? I have no idea what it is', default=1)
+#    parser.add_argument('-a', '--activationF', type=ast.literal_eval, help='Types of activation function', default=['nn.Tanh'])
     args = parser.parse_args()
-    ppoagent = ppo_agent(env_name=args.env_name, hidden_activation=nn.Tanh)
+    ppoagent = ppo_agent(num_envs=args.num_envs, env_name=args.env_name, hidden_activation=nn.ReLU)
     ppoagent.run()
