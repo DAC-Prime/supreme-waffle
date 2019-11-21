@@ -123,7 +123,11 @@ class ppo_agent():
         test_rewards = []
         state = self.envs.reset()
         cumu_rewd = np.zeros(self.num_envs)
-        fd = open('ppo.log', 'w')
+        try:
+            os.mkdir('data')
+        except OSError as error:
+            print(error)
+        fd = open('./data/{}_ppo.log'.format(self.env_name), 'w')
         while frame_idx < self.max_frames:
             log_probs = []
             values = []
