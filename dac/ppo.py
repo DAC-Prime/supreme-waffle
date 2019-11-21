@@ -90,6 +90,19 @@ def ppo_update(model,
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
 
+def test_env(model, env, vis=False):
+    state = env.reset()
+    if vis: env.render()
+    done = [False]
+    total_reward = 0
+    while not done[0]:
+        state = torch.FloatTensor(state).unsqueeze(0)
+        dist, _ = model(state)
+        next_state, reward, done, _ = env.step(dist.sample())
+        state = next_state
+        if vis: env.render()
+        total_reward += reward[0]
+    return total_reward
 
 class ppo_agent():
     def __init__(self,
@@ -112,6 +125,9 @@ class ppo_agent():
         self.envs = [make_env(self.env_name) for i in range(self.num_envs)]
         self.envs = SubprocVecEnv(self.envs)
         self.envs = VecNormalize(self.envs, ret=False)
+        self.env = [make_env(self.env_name)]
+        self.env = DummyVecEnv(self.env)
+        self.env = VecNormalize(self.env, ret=False)
         self.num_inputs = self.envs.observation_space.shape[0]
         self.num_outputs = self.envs.action_space.shape[0]
         self.model = ActorCritic(self.num_inputs, self.num_outputs,
@@ -153,7 +169,7 @@ class ppo_agent():
                     if done[i]:
                         print("Cumulative reward at step " + str(frame_idx) +
                               " is " + str(cumu_rewd[i]))
-                        fd.write("%d %f\n" % (frame_idx, cumu_rewd[i]))
+#                        fd.write("%d %f\n" % (frame_idx, cumu_rewd[i]))
                         cumu_rewd[i] = 0
 
 #                    fd.flush()
@@ -169,6 +185,7 @@ class ppo_agent():
                 state = next_state
                 frame_idx += 1
 
+
             next_state = torch.FloatTensor(next_state)
             _, next_value = self.model(next_state)
             returns = compute_gae(next_value, rewards, masks, values)
@@ -182,6 +199,11 @@ class ppo_agent():
             ppo_update(self.model, self.optimizer, self.ppo_epochs,
                        self.mini_batch_size, states, actions, log_probs,
                        returns, advantage)
+            test_reward = np.mean([test_env(self.model, self.env) for _ in range(10)])
+            print("Evaluation reward at step " + str(frame_idx) +
+                  " is " + str(test_reward))
+            fd.write("%d %f\n" % (frame_idx, test_reward))
+            fd.flush()
 
         fd.close()
 

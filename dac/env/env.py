@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 
 from baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
+from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
 #from baselines.common.running_mean_std import RunningMeanStd
 from baselines.common.vec_env.vec_normalize import VecNormalize
 
