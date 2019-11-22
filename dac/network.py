@@ -13,6 +13,36 @@ def tensor(x):
     x = torch.tensor(x, device=DEVICE, dtype=torch.float32)
     return x
 
+class DACNetwork(nn.Module):
+    def __init__(self, obs_dim, action_dim, num_options):
+        super(DACNetwork, self).__init__()
+
+        self.higher_net = MasterNetwork(obs_dim, num_options)
+        self.lower_nets = [LowerNetwork(obs_dim, action_dim) for _ in range(num_options)]
+
+    def forward(self, x):
+        mean = []
+        std = []
+        beta = []
+        for lower_net in self.lower_nets:
+            option_pred = lower_net(x)
+            mean.append(option_pred["mean_action"].unsqueeze(1))
+            std.append(option_pred["std_action"].unsqueeze(1))
+            beta.append(option_pred["termination_prob"])
+        mean = torch.cat(mean, dim=1)
+        std = torch.cat(std, dim=1)
+        beta = torch.cat(beta, dim=1)
+
+        master_pred = self.higher_net(x)
+
+        return {
+            "mean": mean,
+            "std": std,
+            "beta": beta,
+            "q_option": master_pred["q_option"],
+            "master_policy": master_pred["master_policy"],
+        }
+
 
 class MasterNetwork(nn.Module):
     def __init__(self, obs_dim, num_options):
@@ -22,11 +52,11 @@ class MasterNetwork(nn.Module):
         self.value_net = FCNetwork(obs_dim, num_options)
 
     def forward(self, x):
-        policy_option = self.master_policy_net(x)
+        master_policy = self.master_policy_net(x)
         q_option = self.value_net(x)
 
         return {
-            "policy_option": policy_option,
+            "master_policy": master_policy,
             "q_option": q_option,
         }
 
@@ -61,7 +91,6 @@ class FCNetwork(nn.Module):
         layers = list()
         dims = (input_dim,) + hidden_dims
         for in_dim, out_dim in zip(dims[:-1], dims[1:]):
-            print((in_dim, out_dim))
             layers.append(nn.Linear(in_features=in_dim, out_features=out_dim))
             layers.append(hidden_activation())
         layers.append(nn.Linear(in_features=hidden_dims[-1], out_features=output_dim))
