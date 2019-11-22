@@ -8,8 +8,8 @@
 
 #SBATCH --time=100:00:00
 #SBATCH --nodes=1
-#SBATCH --tasks-per-node=2
-#SBATCH -J PPO_9_Swimmer-v2
+#SBATCH --tasks-per-node=1
+#SBATCH -J PPO_Swimmer-v2_9
 #SBATCH --mem=24G
 
 # RUNNING CPU(skylake>broadwell>haswell>ivy>sandy)

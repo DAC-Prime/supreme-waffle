@@ -4,6 +4,5 @@ __pycache__/
 .DS_Store
 slurm-*
 temp/
-data/
 batch.sh
 run_jobs.sh

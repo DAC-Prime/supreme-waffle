@@ -148,7 +148,8 @@ class ppo_agent():
             os.mkdir(path)
         except OSError as error:
             print(error)
-        curtime = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+        curtime = datetime.datetime.now().strftime("%Y%m%d%H%M%S") \
+                    + "_{:04d}".format(random.randint(1,9999))
         fd_train = open(path + '/ppo_train_{}.log'.format(curtime), 'w')
         fd_eval = open(path + '/ppo_eval_{}.log'.format(curtime), 'w')
         while frame_idx < self.max_frames:
