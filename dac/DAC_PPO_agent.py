@@ -1,6 +1,7 @@
 from enum import Enum
 
 from network import *
+from env.env import *
 # from ..parameters import *
 import torch
 import numpy as np
@@ -28,8 +29,9 @@ class DACPPOAgent:
         self.ppo_clip_param = 0.2
 
         self.cur_steps = 0
-        self.max_steps = 2e4
+        self.max_steps = 2e3
         self.num_steps = 2048
+        self.num_steps = 128
         self.env_name = env_name
         self.num_envs = 1
         self.num_options = 4
@@ -39,18 +41,18 @@ class DACPPOAgent:
         self.worker_index = tensor(np.arange(self.num_workers)).long()
         self.prev_options = tensor(np.zeros(self.num_workers)).long()
 
-        self.envs = [make_env(self.env_name) for i in range(self.num_envs)]
-        self.envs = SubprocVecEnv(self.envs)
-        self.envs = VecNormalize(self.envs, ret=False)
-        self.test_env = [make_env(self.env_name)]
-        self.test_env = DummyVecEnv(self.env)
-        self.test_env = VecNormalize(self.env, ret=False)
+        train_envs = [make_env(self.env_name) for i in range(self.num_envs)]
+        train_envs = SubprocVecEnv(train_envs)
+        self.envs = VecNormalize(train_envs, ret=False)
+        test_env = [make_env(self.env_name)]
+        test_env = DummyVecEnv(test_env)
+        self.test_env = VecNormalize(test_env, ret=False)
 
         self.states = self.envs.reset()
         self.test_env.reset()
 
-        obs_dim = self.env.observation_space.shape[0]
-        action_dim = self.env.action_space.shape[0]
+        obs_dim = self.test_env.observation_space.shape[0]
+        action_dim = self.test_env.action_space.shape[0]
         # self.options = [LowerNetwork(obs_dim, action_dim) for _ in range(self.num_options)]
         # self.higher_policy = MasterNetwork(obs_dim, self.num_options)
         self.dac_net = DACNetwork(obs_dim, action_dim, self.num_options)
@@ -200,6 +202,7 @@ class DACPPOAgent:
             stds_cache = []
 
             for _ in range(self.num_steps):
+                print(self.cur_steps)
                 prediction = self.dac_net(states)
                 pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
                 options = torch.distributions.Categorical(probs = pi_h).sample()

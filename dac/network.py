@@ -91,7 +91,6 @@ class FCNetwork(nn.Module):
         layers = list()
         dims = (input_dim,) + hidden_dims
         for in_dim, out_dim in zip(dims[:-1], dims[1:]):
-            print((in_dim, out_dim))
             layers.append(nn.Linear(in_features=in_dim, out_features=out_dim))
             layers.append(hidden_activation())
         layers.append(nn.Linear(in_features=hidden_dims[-1], out_features=output_dim))
