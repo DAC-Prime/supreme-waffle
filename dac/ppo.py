@@ -57,7 +57,9 @@ def ppo_iter(mini_batch_size, states, actions, log_probs, returns, advantage):
         yield states[rand_ids, :], actions[rand_ids, :], log_probs[
             rand_ids, :], returns[rand_ids, :], advantage[rand_ids, :]
 
-
+# states.shape is [num_envs*mini_batch_size, observation_space]
+# dist.log_prob(action) gives a tensor with shape [num_envs*mini_batch_size, action_space],
+# thus needs to use .sum(1).unsqueeze(1) to transform to [num_envs*mini_batch_size, 1]
 def ppo_update(model,
                optimizer,
                ppo_epochs,
