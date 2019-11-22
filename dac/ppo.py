@@ -195,6 +195,7 @@ class ppo_agent():
             states = torch.cat(states).detach()
             actions = torch.cat(actions).detach()
             advantage = returns - values
+            advantage = (advantage - advantage.mean()) / advantage.std()
             ppo_update(self.model, self.optimizer, self.ppo_epochs,
                        self.mini_batch_size, states, actions, log_probs,
                        returns, advantage)
