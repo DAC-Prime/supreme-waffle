@@ -4,6 +4,7 @@ from env.env import *
 import random
 import datetime
 import os
+import sys
 import ast
 
 def init_weights(m):
@@ -73,8 +74,7 @@ def ppo_update(model,
                 advantages):
             dist, value = model(state)
             #            entropy = dist.entropy().mean()
-            new_log_probs = dist.log_prob(action)
-
+            new_log_probs = dist.log_prob(action).sum(1).unsqueeze(1)
             ratio = (new_log_probs - old_log_probs).exp()
             surr1 = ratio * advantage
             surr2 = torch.clamp(ratio, 1.0 - clip_param,
@@ -84,7 +84,6 @@ def ppo_update(model,
             critic_loss = (return_ - value).pow(2).mean()
 
             loss = 0.5 * critic_loss + actor_loss  # - 0.001 * entropy
-
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -147,7 +146,9 @@ class ppo_agent():
             os.mkdir(path)
         except OSError as error:
             print(error)
-        fd = open(path + '/ppo_{}_{:03d}.log'.format(datetime.datetime.now().strftime("%Y%m%d%H%M%S"), random.randint(1,99)), 'w')
+        curtime = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+        fd_train = open(path + '/ppo_train_{}.log'.format(curtime), 'w')
+        fd_eval = open(path + '/ppo_eval_{}.log'.format(curtime), 'w')
         while frame_idx < self.max_frames:
             log_probs = []
             values = []
@@ -169,12 +170,12 @@ class ppo_agent():
                     if done[i]:
                         print("Cumulative reward at step " + str(frame_idx) +
                               " is " + str(cumu_rewd[i]))
-#                        fd.write("%d %f\n" % (frame_idx, cumu_rewd[i]))
+                        fd_train.write("%d %f\n" % (frame_idx, cumu_rewd[i]))
                         cumu_rewd[i] = 0
 
-#                    fd.flush()
+                    fd_train.flush()
 
-                log_prob = dist.log_prob(action)
+                log_prob = dist.log_prob(action).sum(1).unsqueeze(1)
                 #                entropy += dist.entropy().mean()
                 log_probs.append(log_prob)
                 values.append(value)
@@ -185,7 +186,6 @@ class ppo_agent():
                 state = next_state
                 frame_idx += 1
 
-
             next_state = torch.FloatTensor(next_state)
             _, next_value = self.model(next_state)
             returns = compute_gae(next_value, rewards, masks, values)
@@ -195,24 +195,26 @@ class ppo_agent():
             states = torch.cat(states).detach()
             actions = torch.cat(actions).detach()
             advantage = returns - values
-
             ppo_update(self.model, self.optimizer, self.ppo_epochs,
                        self.mini_batch_size, states, actions, log_probs,
                        returns, advantage)
             test_reward = np.mean([test_env(self.model, self.env) for _ in range(10)])
             print("Evaluation reward at step " + str(frame_idx) +
                   " is " + str(test_reward))
-            fd.write("%d %f\n" % (frame_idx, test_reward))
-            fd.flush()
+            sys.stdout.flush()
+            fd_eval.write("%d %f\n" % (frame_idx, test_reward))
+            fd_eval.flush()
 
-        fd.close()
+        fd_train.close()
+        fd_eval.close()
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Run PPO on a specific game.')
     parser.add_argument('-e', '--env_name', type=str, help='Name of the game', default='HalfCheetah-v2')
-    parser.add_argument('-n', '--num_envs', type=int, help='Number of envs? I have no idea what it is', default=1)
-#    parser.add_argument('-a', '--activationF', type=ast.literal_eval, help='Types of activation function', default=['nn.Tanh'])
+    parser.add_argument('-n', '--num_envs', type=int, help='Number of workers', default=1)
+    parser.add_argument('-a', '--activationF', type=str, help='Types of activation function', default='relu')
     args = parser.parse_args()
-    ppoagent = ppo_agent(num_envs=args.num_envs, env_name=args.env_name, hidden_activation=nn.ReLU)
+    activation_dict = {'tanh':nn.Tanh, 'relu':nn.ReLU}
+    ppoagent = ppo_agent(num_envs=args.num_envs, env_name=args.env_name, hidden_activation=activation_dict[args.activationF])
     ppoagent.run()
