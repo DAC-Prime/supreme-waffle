@@ -6,12 +6,11 @@ import numpy as np
 def tensor(x):
     if isinstance(x, torch.tensor):
         return x
-    x = torch.tensor(np.asanyarray(x, dtype= np.float), device = Config.DEVICE, dtype = torch.float32)
+    x = torch.tensor(np.asanyarray(x, dtype = np.float), device = Config.DEVICE, dtype = torch.float32)
     return x
 
 class DACPPOAgent:
-    # def __init__(self, config):
-    def __init__(self):
+    def __init__(self, env_name):
         # following fields are from config
         self.num_workers = 1
         self.discount = None
@@ -21,13 +20,29 @@ class DACPPOAgent:
 
         # self.config = config
 
-        self.network = config.network_fn()
-        self.option_set = []
-        self.is_init_states = tensor(np.ones((config.num_workers))).byte()
-        # self.worker_index = 
-        # self.pre_options = 
+        # self.network = config.network_fn()
+        self.cur_steps = 0
+        self.max_steps = 2e6
+        self.num_steps = 2048
+        self.env_name = env_name
+        self.num_envs = 1
+        self.num_options = 4
+        obs_dim = self.env.observation_space.shape[0]
+        action_dim = self.env.action_space.shape[0]
+        self.options = [LowerNetwork(obs_dim, action_dim) for _ in range(self.num_options)]
+        self.higher_policy = MasterNetwork(obs_dim, self.num_options)
+        # self.higher_optimizer = 
+        # self.lower_optimizer =
+        
+        self.is_init_states = tensor(np.ones((self.num_workers))).byte()
         self.worker_index = tensor(np.arange(self.num_workers)).long()
+        self.prev_options = tensor(np.zeros(self.num_workers)).long()
 
+        self.envs = [make_env(self.env_name) for i in range(self.num_envs)]
+        self.envs = SubprocVecEnv(self.envs)
+        self.envs = VecNormalize(self.envs, ret=False)
+
+        self.states = self.envs.reset()
 
     def compute_pi_h(self, prediction, pre_option, is_init_states):
         intra_pi = prediction["policy_option"]
@@ -91,8 +106,82 @@ class DACPPOAgent:
 
     def learn(self):
         # config = self.config
-
+        pass
 
     # use code from ppo.py here
-    def step(self):
-        pass
+    def run(self):
+        states = self.states
+        # storage = Storage(config.rollout_length, ['adv_bar', 'adv_hat', 'ret_bar', 'ret_hat'])
+        cumu_rewd = np.zeros(self.num_envs)
+
+        while self.cur_steps <= self.max_steps:
+            for _ in range(self.num_steps):
+                prediction = self.network(states)
+                pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
+                options = torch.distributions.Categorical(probs = pi_h).sample()
+
+                # maybe need add log here
+
+                mean = prediction['mean'][self.worker_index, options]
+                std = prediction['std'][self.worker_index, options]
+                actions = torch.distributions.Normal(mean, std).sample()
+
+                pi_l = self.compute_pi_l(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
+
+                value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
+                value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
+
+                next_state, reward, done, info = self.envs.step(actions) # done: terminated
+                cumu_rewd += reward
+                
+                #  storage.add(prediction)
+                #  storage.add({'r': tensor(rewards).unsqueeze(-1),
+                #              'm': tensor(1 - terminals).unsqueeze(-1),
+                #              'a': actions,
+                #              'o': options.unsqueeze(-1),
+                #              'prev_o': self.prev_options.unsqueeze(-1),
+                #              's': tensor(states),
+                #              'init': self.is_initial_states.unsqueeze(-1),
+                #              'pi_hat': pi_hat,
+                #              'log_pi_hat': pi_hat[self.worker_index, options].add(1e-5).log().unsqueeze(-1),
+                #              'log_pi_bar': pi_bar.add(1e-5).log(),
+                #              'v_bar': v_bar,
+                #              'v_hat': v_hat})
+
+                self.is_initial_states = tensor(done).byte()
+                self.prev_options = options
+                states = next_state
+                self.cur_steps += self.num_workers
+            
+            prediction = self.network(states)
+            pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
+            options = torch.distributions.Categorical(probs = pi_h).sample()
+
+            # maybe need add log here
+
+            mean = prediction['mean'][self.worker_index, options]
+            std = prediction['std'][self.worker_index, options]
+            actions = torch.distributions.Normal(mean, std).sample()
+
+            pi_l = self.compute_pi_l(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
+
+            value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
+            value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
+
+            # storage.add(prediction)
+            # storage.add({
+            #     'v_bar': v_bar,
+            #     'v_hat': v_hat,
+            # })
+            # storage.placeholder()
+
+            # [o] = storage.cat(['o'])
+
+            # log here
+
+            # computer advantange 
+
+            mdp_types = ['high', 'low']
+            np.random.shuffle(mdps)
+            self.learn(storage, mdps[0])
+            self.learn(storage, mdps[1])
