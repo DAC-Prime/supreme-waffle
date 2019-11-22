@@ -26,9 +26,9 @@ class DACNetwork(nn.Module):
         beta = []
         for lower_net in self.lower_nets:
             option_pred = lower_net(x)
-            mean.append(option_pred['mean_action'].unsqueeze(1))
-            std.append(option_pred['std_action'].unsqueeze(1))
-            beta.append(option_pred['termination_prob'])
+            mean.append(option_pred["mean_action"].unsqueeze(1))
+            std.append(option_pred["std_action"].unsqueeze(1))
+            beta.append(option_pred["termination_prob"])
         mean = torch.cat(mean, dim=1)
         std = torch.cat(std, dim=1)
         beta = torch.cat(beta, dim=1)
@@ -36,11 +36,11 @@ class DACNetwork(nn.Module):
         master_pred = self.higher_net(x)
 
         return {
-            'mean': mean,
-            'std': std,
-            'beta': beta,
-            'q_option': master_pred["q_option"],
-            'master_policy': master_pred["master_policy"],
+            "mean": mean,
+            "std": std,
+            "beta": beta,
+            "q_option": master_pred["q_option"],
+            "master_policy": master_pred["master_policy"],
         }
 
 

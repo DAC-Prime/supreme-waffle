@@ -1,7 +1,7 @@
 from enum import Enum
 
-from ..network import *
-from ..parameters import *
+from network import *
+# from ..parameters import *
 import torch
 import numpy as np
 
@@ -25,7 +25,7 @@ class DACPPOAgent:
         self.gae_tau = 1.0
 
         self.cur_steps = 0
-        self.max_steps = 2e6
+        self.max_steps = 2e4
         self.num_steps = 2048
         self.env_name = env_name
         self.num_envs = 1
@@ -55,6 +55,7 @@ class DACPPOAgent:
                                     eps=1e-5)
         # self.higher_optimizer =
         # self.lower_optimizer =
+
 
     def compute_pi_h(self, prediction, pre_option, is_init_states):
         intra_pi = prediction["master_policy"]
@@ -119,6 +120,7 @@ class DACPPOAgent:
     def learn(self):
         # config = self.config
         pass
+
 
     # use code from ppo.py here
     def run(self):
@@ -194,6 +196,18 @@ class DACPPOAgent:
             # computer advantange 
 
             mdp_types = [MdpType.high, MdpType.low]
-            np.random.shuffle(mdps)
-            self.learn(storage, mdps[0])
-            self.learn(storage, mdps[1])
+            np.random.shuffle(mdp_types)
+            # self.learn(storage, mdp_types[0])
+            # self.learn(storage, mdp_types[1])
+
+
+if __name__ == '__main__':
+    # import argparse
+    # parser = argparse.ArgumentParser(description='Run PPO on a specific game.')
+    # parser.add_argument('-e', '--env_name', type=str, help='Name of the game', default='HalfCheetah-v2')
+    # parser.add_argument('-n', '--num_envs', type=int, help='Number of workers', default=1)
+    # parser.add_argument('-a', '--activationF', type=str, help='Types of activation function', default='relu')
+    # args = parser.parse_args()
+    # activation_dict = {'tanh':nn.Tanh, 'relu':nn.ReLU}
+    ppoagent = DACPPOAgent("Ant-v2")
+    ppoagent.run()
