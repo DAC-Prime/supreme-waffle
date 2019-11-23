@@ -34,9 +34,10 @@ def load_results(data_path):
                 data.append(np.loadtxt(data_path+'/'+str(_file)))
         return np.array(data), files, game
     elif os.path.isfile(data_path):
+        data = np.loadtxt(data_path)
         data_path = data_path.split('/')
         # :-24 is to remove the previous datetime string
-        return np.loadtxt(data_path), data_path[-1][:-24], data_path[-2]
+        return data, data_path[-1][:-24], data_path[-2]
     else:
         print('Please enter a valid data path.')
         exit()
@@ -49,14 +50,14 @@ def plot_mean_standard_error(data, agent):
     Output:
         N/A
     """
-    print(data.shape)
+    # print(data.shape)
     x = data[0,:,0]
     e_x = (np.std(data, axis=0) / np.sqrt(data.shape[0]))[:,1]
     m_x = np.mean(data, axis=0)[:,1]
     plt.plot(x, m_x, label=agent)
     plt.fill_between(x, m_x + e_x, m_x - e_x, alpha=0.3)
 
-def plot(data, filenames, game):
+def plot(data, filenames, game, destination):
     """
     This function is used for plotting different agent performance under the same
     environment.
@@ -76,8 +77,8 @@ def plot(data, filenames, game):
         plt.title('{}'.format(game))
         plt.legend()
         figname = '{}_{}.png'.format(game, datetime_random_str())
-        plt.savefig('images/{}'.format(figname))
-        print('Images saved as {}'.format(figname))
+        plt.savefig('{}/{}'.format(destination, figname))
+        print('Images saved as {}/{}'.format(destination, figname))
         plt.close()
     else:
         print('{} results have been found.'.format(len(filenames)))
@@ -101,19 +102,20 @@ def plot(data, filenames, game):
         plt.ylabel('Cumulative reward')
         plt.title('{}'.format(game))
         figname = '{}_{}.png'.format(game, datetime_random_str())
-        plt.savefig('images/{}'.format(figname))
+        plt.savefig('{}/{}'.format(destination, figname))
         plt.close()
-        print('Images saved as {}'.format(figname))
+        print('Images saved as {}/{}'.format(destination, figname))
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description="Plot the agent training results. Please make sure your log file name is following the format of ppo.py, i.e. '%Y%m%d%H%M%S%f'")
-    parser.add_argument('-p', '--path_result', type=str, help='path of the results. It can be a directory or a specific file.', default='./data')
+    parser.add_argument('-p', '--path_log', type=str, help="path of the results. It can be a directory or a specific file. Default is './data'", default='./data')
+    parser.add_argument('-d', '--destination', type=str, help="destination path of the image. It should be a directory. Default is './temp'", default='./temp')
     args = parser.parse_args()
     try:
-        os.mkdir('./images')
+        os.mkdir(args.destination)
     except OSError as error:
         print(error)
-    data, filenames, game = load_results(data_path=args.path_result)
-    print(filenames, game)
-    plot(data, filenames, game)
+    data, filenames, game = load_results(data_path=args.path_log)
+    # print(filenames, game)
+    plot(data, filenames, game, args.destination)
