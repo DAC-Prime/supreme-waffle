@@ -26,12 +26,11 @@ def load_results(data_path):
     """
     if os.path.isdir(data_path):
         game = data_path.split('/')[-1]
-        files = os.listdir(data_path)
+        files = [f for f in os.listdir(data_path) if os.path.isfile(data_path+'/'+f)]
         data = []
         for _file in files:
-            if not os.path.isdir(_file):
-                #print(_file)
-                data.append(np.loadtxt(data_path+'/'+str(_file)))
+            #if not os.path.isdir(data_path+'/'+str(_file)):
+            data.append(np.loadtxt(data_path+'/'+str(_file)))
         return np.array(data), files, game
     elif os.path.isfile(data_path):
         data = np.loadtxt(data_path)
@@ -45,7 +44,7 @@ def load_results(data_path):
 def plot_mean_standard_error(data, agent):
     """
     Input: 
-        - data: 3d array. [# of training times, output steps, output reward]
+        - data: 3d array. [# of times run, output steps, output reward]
         - agent: 1d array. string. 
     Output:
         N/A
@@ -57,7 +56,32 @@ def plot_mean_standard_error(data, agent):
     plt.plot(x, m_x, label=agent)
     plt.fill_between(x, m_x + e_x, m_x - e_x, alpha=0.3)
 
-def plot(data, filenames, game, destination):
+def calculate_interpolation(data, num_interplt):
+    """
+    Input: 
+        - data: 3d array. [# of times run, output steps, output reward]
+        - num_interplt: number points of interplorationA
+    Output:
+        - data: 3d array. [# of times run, num_interplt_step, reward_interplt]
+    """
+    # output steps may be different numbers! 
+    max_step = 0.0
+    for i in range(len(data)):
+        max_step = max(max_step, data[i].max())
+    print(max_step)
+    new_data = []
+    new_x = np.arange(0,  max_step, num_interplt)
+    for i in range(len(data)):
+        if len(data.shape) == 1:
+            new_data.append(np.stack((new_x, np.interp(new_x, data[i][:,0], data[i][:, 1])), axis=1))
+        elif len(data.shape) == 3:
+            new_data.append(np.stack((new_x, np.interp(new_x, data[i,:,0], data[i,:,1])), axis=1))
+        else:
+            print('Wrong format of read data! Check your log file or Input!')
+    new_data = np.array(new_data)
+    return new_data
+
+def plot(data, filenames, game, destination, num_interplt):
     """
     This function is used for plotting different agent performance under the same
     environment.
@@ -93,7 +117,7 @@ def plot(data, filenames, game, destination):
             for i in range(len(agents)):
                 if agent == agents[i]:
                     i_data.append(data[i])
-            i_data = np.array(i_data)
+            i_data = calculate_interpolation(np.array(i_data), num_interplt)
             plot_mean_standard_error(i_data, agent)
         plt.legend()
         ax = plt.gca()
@@ -108,9 +132,11 @@ def plot(data, filenames, game, destination):
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description="Plot the agent training results. Please make sure your log file name is following the format of ppo.py, i.e. '%Y%m%d%H%M%S%f'")
-    parser.add_argument('-p', '--path_log', type=str, help="path of the results. It can be a directory or a specific file. Default is './data'", default='./data')
+    parser = argparse.ArgumentParser(description="Plot the agent training results. Please make sure your log file name is following the format of ppo.py, i.e. '%Y%m%d%H%M%S%f'. \
+                                                  e.g. python plot.py -p './data/HalfCheetah-v2' -d './temp' ")
+    parser.add_argument('-p', '--path_log', type=str, help="path of the results. It can be a directory or a specific file. Default is './data/HalfCheetah-v2'", default='./dataHalfCheetah-v2')
     parser.add_argument('-d', '--destination', type=str, help="destination path of the image. It should be a directory. Default is './temp'", default='./temp')
+    parser.add_argument('-i', '--interploration', type=int, help="number used for linear interpolation of data. Default is 100.", default=100)
     args = parser.parse_args()
     try:
         os.mkdir(args.destination)
@@ -118,4 +144,4 @@ if __name__ == '__main__':
         print(error)
     data, filenames, game = load_results(data_path=args.path_log)
     # print(filenames, game)
-    plot(data, filenames, game, args.destination)
+    plot(data, filenames, game, args.destination, args.interploration)
