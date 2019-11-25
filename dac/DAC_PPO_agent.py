@@ -11,8 +11,8 @@ import numpy as np
 #         return x
 #     x = torch.tensor(np.asanyarray(x, dtype = np.float), device = Config.DEVICE, dtype = torch.float32)
 #     return x
-def cat(cache, size):
-    return torch.cat(x[:size], dim=0)
+def cat(x, size):
+    return torch.cat(x[:size], dim = 0)
 
 class MdpType(Enum):
     high = "high"
@@ -29,9 +29,9 @@ class DACPPOAgent:
         self.ppo_clip_param = 0.2
 
         self.cur_steps = 0
-        self.max_steps = 2e3
+        self.max_steps = 2e6
         self.num_steps = 2048
-        self.num_steps = 128
+        # self.num_steps = 32
         self.env_name = env_name
         self.num_envs = 1
         self.num_options = 4
@@ -111,15 +111,15 @@ class DACPPOAgent:
         ret = values[-1].detach()
         advs = tensor(np.zeros((self.num_workers, 1)))
 
-        for i in reversed(range(self.num_workers, 1)):
+        for i in reversed(range(self.num_steps)):
             ret = rewards[i] + self.discount * (1 - dones[i]) * ret
             if not self.use_gae:
                 advs = ret - values[i].detach()
             else:
                 td_error = rewards[i] + self.discount * (1 - dones[i]) * values[i + 1] - values[i] # td_error ?
                 advs = advs * self.gae_tau * self.discount * (1 - dones[i]) + td_error
-            adv[i] = advs.detach()
-            returns[i] = ret.detach()
+            adv.append(advs.detach())
+            returns.append(ret.detach())
 
         return adv, returns
 
@@ -147,8 +147,8 @@ class DACPPOAgent:
         advs = (advs - advs.mean()) / advs.std()
 
         for _ in range(self.optimization_epochs):
-            for sample_pi_h, sample_mean, sample_std, sample_states, sample_prev_options, sample_init_states,
-                sampled_options, sample_actions, sample_log_pi, sample_returns, sample_advs 
+            for sample_pi_h, sample_mean, sample_std, sample_states, sample_prev_options, sample_init_states, \
+                sample_options, sample_actions, sample_log_pi, sample_returns, sample_advs \
                 in self.random_iter(pi_h, mean, std, states, prev_options, init_states,
                     options, actions, log_pi, returns, advs):
 
@@ -156,11 +156,11 @@ class DACPPOAgent:
 
                 if mdp_type == MdpType.high:
                     cur_pi_hat = self.compute_pi_h(sample_prediction, sample_prev_options.view(-1), sample_init_states.view(-1))
-                    entropy = -(cur_pi_hat * cur_pi_hat.ad(1e-5).log()).sum(-1).mean()
+                    entropy = -(cur_pi_hat * cur_pi_hat.add(1e-5).log()).sum(-1).mean()
                     new_log_pi = self.compute_log_pi(mdp_type, cur_pi_hat, sample_options, sample_actions, sample_mean, sample_std)
                     beta_loss = sample_prediction["beta"].mean()
                 else:
-                    new_log_pi = self.compute_log_pi(mdp_type, sample_pi_hat, sample_options, sample_actions, sample_mean, sample_std)
+                    new_log_pi = self.compute_log_pi(mdp_type, sample_pi_h, sample_options, sample_actions, sample_mean, sample_std)
                     entropy = 0
                     beta_loss = 0
                 
@@ -173,7 +173,7 @@ class DACPPOAgent:
                 objective = ratio * sample_advs
                 objective_clipped = ratio.clamp(1.0 - self.ppo_clip_param, 1.0 + self.ppo_clip_param) * sample_advs
                 policy_loss = -torch.min(objective, objective_clipped).mean() # ?
-                value_loss = 0.5 * (sample_returns, value).pow(2).mean()
+                value_loss = 0.5 * (sample_returns - value).pow(2).mean()
 
                 self.opt.zero_grad()
                 (policy_loss + value_loss).backward()
@@ -188,6 +188,7 @@ class DACPPOAgent:
 
         while self.cur_steps <= self.max_steps:
             rewards_cache = []
+            states_cache = []
             dones_cache = []
             actions_cache = []
             options_cache = []
@@ -202,7 +203,7 @@ class DACPPOAgent:
             stds_cache = []
 
             for _ in range(self.num_steps):
-                print(self.cur_steps)
+                # print(self.cur_steps)
                 prediction = self.dac_net(states)
                 pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
                 options = torch.distributions.Categorical(probs = pi_h).sample()
@@ -236,6 +237,7 @@ class DACPPOAgent:
                 #              'v_hat': v_hat})
 
                 rewards_cache.append(tensor(reward).unsqueeze(-1))
+                states_cache.append(tensor(states))
                 dones_cache.append(tensor(done).unsqueeze(-1))
                 actions_cache.append(actions)
                 options_cache.append(options.unsqueeze(-1))
@@ -286,9 +288,11 @@ class DACPPOAgent:
 
             # computer advantange
             adv_h_cache, returns_h_cache = self.compute_adv(value_h_cache, rewards_cache, dones_cache)
+            print("adv_h_cache len %s" % len(adv_h_cache))
             adv_l_cache, returns_l_cache = self.compute_adv(value_l_cache, rewards_cache, dones_cache)
 
             rewards_cache = cat(rewards_cache, self.num_steps)
+            states_cache = cat(states_cache, self.num_steps)
             dones_cache = cat(dones_cache, self.num_steps)
             actions_cache = cat(actions_cache, self.num_steps).detach()
             options_cache = cat(options_cache, self.num_steps)
@@ -308,8 +312,45 @@ class DACPPOAgent:
 
             mdp_types = [MdpType.high, MdpType.low]
             np.random.shuffle(mdp_types)
-            self.learn(storage, mdp_types[0])
-            self.learn(storage, mdp_types[1])
+            # self.learn(storage, mdp_types[0])
+            # self.learn(storage, mdp_types[1])
+
+            def helper(mdp_type):
+                if mdp_type == MdpType.high:
+                    return log_pi_h_cache, returns_h_cache, adv_h_cache
+                else:
+                    return log_pi_l_cache, returns_l_cache, adv_l_cache
+
+            log_pi_cache, returns_cache, adv_cache = helper(mdp_types[0])
+            self.learn(
+                mdp_types[0],
+                rewards_cache,
+                states_cache,
+                actions_cache,
+                options_cache,
+                log_pi_cache,
+                returns_cache,
+                adv_cache,
+                prev_options_cache,
+                init_states_cache,
+                pi_h_cache,
+                means_cache,
+                stds_cache)
+            log_pi_cache, returns_cache, adv_cache = helper(mdp_types[1])
+            self.learn(
+                mdp_types[1],
+                rewards_cache,
+                states_cache,
+                actions_cache,
+                options_cache,
+                log_pi_cache,
+                returns_cache,
+                adv_cache,
+                prev_options_cache,
+                init_states_cache,
+                pi_h_cache,
+                means_cache,
+                stds_cache)
 
 
 if __name__ == '__main__':
