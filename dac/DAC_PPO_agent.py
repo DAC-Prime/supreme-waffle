@@ -1,16 +1,14 @@
+import os
+import datetime
+import logging
+from tqdm import tqdm
 from enum import Enum
 
 from network import *
 from env.env import *
-# from ..parameters import *
 import torch
 import numpy as np
 
-# def tensor(x):
-#     if isinstance(x, torch.tensor):
-#         return x
-#     x = torch.tensor(np.asanyarray(x, dtype = np.float), device = Config.DEVICE, dtype = torch.float32)
-#     return x
 def cat(x, size):
     return torch.cat(x[:size], dim = 0)
 
@@ -44,24 +42,32 @@ class DACPPOAgent:
         train_envs = [make_env(self.env_name) for i in range(self.num_envs)]
         train_envs = SubprocVecEnv(train_envs)
         self.envs = VecNormalize(train_envs, ret=False)
-        test_env = [make_env(self.env_name)]
-        test_env = DummyVecEnv(test_env)
-        self.test_env = VecNormalize(test_env, ret=False)
+        eval_env = [make_env(self.env_name)]
+        eval_env = DummyVecEnv(eval_env)
+        self.eval_env = VecNormalize(eval_env, ret=False)
 
         self.states = self.envs.reset()
-        self.test_env.reset()
+        self.eval_env.reset()
 
-        obs_dim = self.test_env.observation_space.shape[0]
-        action_dim = self.test_env.action_space.shape[0]
+        obs_dim = self.eval_env.observation_space.shape[0]
+        action_dim = self.eval_env.action_space.shape[0]
         # self.options = [LowerNetwork(obs_dim, action_dim) for _ in range(self.num_options)]
         # self.higher_policy = MasterNetwork(obs_dim, self.num_options)
         self.dac_net = DACNetwork(obs_dim, action_dim, self.num_options)
         self.opt = optim.Adam(self.dac_net.parameters(),
                                     lr=3e-4,
                                     eps=1e-5)
-        # self.higher_optimizer =
-        # self.lower_optimizer =
 
+        path='./data/{}'.format(self.env_name)
+        if not os.path.exists(path):
+            os.makedirs(path)
+        curtime = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+        self.train_logger = logging.getLogger("train")
+        self.eval_logger = logging.getLogger("eval")
+        self.train_logger.setLevel(logging.INFO)
+        self.eval_logger.setLevel(logging.INFO)
+        self.train_logger.addHandler(logging.FileHandler("{path}/dac_ppo_train_{curtime}.log".format(path=path, curtime=curtime), "w"))
+        self.eval_logger.addHandler(logging.FileHandler("{path}/dac_ppo_eval_{curtime}.log".format(path=path, curtime=curtime), "w"))
 
     def compute_pi_h(self, prediction, pre_option, is_init_states):
         intra_pi = prediction["master_policy"]
@@ -181,8 +187,9 @@ class DACPPOAgent:
                 self.opt.step()
 
     # use code from ppo.py here
-    def run(self):
+    def actual_run(self, progress_bar):
         states = self.states
+        # print("train state shape {}".format(states.shape))
         # storage = Storage(config.rollout_length, ['adv_bar', 'adv_hat', 'ret_bar', 'ret_hat'])
         cumu_rewd = np.zeros(self.num_envs)
 
@@ -219,8 +226,15 @@ class DACPPOAgent:
                 value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
                 value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
 
+                # print("train action shape {}".format(actions.shape))
                 next_state, reward, done, info = self.envs.step(actions) # done: terminated
                 cumu_rewd += reward
+                for i in range(self.num_envs):
+                    if done[i]:
+                        # print("Cumulative reward at step {cur_steps} is {reward}".format(cur_steps=self.cur_steps, reward=cumu_rewd[i]))
+                        self.train_logger.info("{cur_steps} {reward}".format(cur_steps=self.cur_steps, reward=cumu_rewd[i]))
+                        cumu_rewd[i] = 0
+
                 
                 #  storage.add(prediction)
                 #  storage.add({'r': tensor(rewards).unsqueeze(-1),
@@ -255,6 +269,7 @@ class DACPPOAgent:
                 self.prev_options = options
                 states = next_state
                 self.cur_steps += self.num_workers
+                progress_bar.update(self.num_workers)
             
             prediction = self.dac_net(states)
             pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
@@ -288,7 +303,7 @@ class DACPPOAgent:
 
             # computer advantange
             adv_h_cache, returns_h_cache = self.compute_adv(value_h_cache, rewards_cache, dones_cache)
-            print("adv_h_cache len %s" % len(adv_h_cache))
+            # print("adv_h_cache len %s" % len(adv_h_cache))
             adv_l_cache, returns_l_cache = self.compute_adv(value_l_cache, rewards_cache, dones_cache)
 
             rewards_cache = cat(rewards_cache, self.num_steps)
@@ -352,14 +367,50 @@ class DACPPOAgent:
                 means_cache,
                 stds_cache)
 
+            eval_reward = np.mean([self.test_env() for _ in range(10)])
+            # print("Evaluation reward at step {cur_steps} is {reward}".format(cur_steps=self.cur_steps, reward=eval_reward))
+            self.eval_logger.info("{cur_steps} {reward}".format(cur_steps=self.cur_steps, reward=eval_reward))
+
+    def test_env(self, vis=False):
+        state = self.eval_env.reset()
+        if vis:
+            self.eval_env.render()
+        done = False
+        total_reward = 0
+        while not done:
+            # print("eval state shape {}".format(state.shape))
+
+            prediction = self.dac_net(state)
+            pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
+            options = torch.distributions.Categorical(probs = pi_h).sample()
+            mean = prediction['mean'][self.worker_index, options]
+            std = prediction['std'][self.worker_index, options]
+            action = torch.distributions.Normal(mean, std).sample()
+
+            next_state, reward, done, _ = self.eval_env.step(action)
+            state = next_state
+            if vis:
+                env.render()
+            total_reward += reward[0]
+        return total_reward
+
+    def run(self):
+        progress_bar = tqdm(total=self.max_steps)
+        try:
+            self.actual_run(progress_bar)
+        finally:
+            progress_bar.close()
+            self.envs.close()
+            self.eval_env.close()
+
 
 if __name__ == '__main__':
-    # import argparse
-    # parser = argparse.ArgumentParser(description='Run PPO on a specific game.')
-    # parser.add_argument('-e', '--env_name', type=str, help='Name of the game', default='HalfCheetah-v2')
+    import argparse
+    parser = argparse.ArgumentParser(description='Run PPO on a specific game.')
+    parser.add_argument('-e', '--env_name', type=str, help='Name of the game', default='HalfCheetah-v2')
     # parser.add_argument('-n', '--num_envs', type=int, help='Number of workers', default=1)
     # parser.add_argument('-a', '--activationF', type=str, help='Types of activation function', default='relu')
-    # args = parser.parse_args()
+    args = parser.parse_args()
     # activation_dict = {'tanh':nn.Tanh, 'relu':nn.ReLU}
-    ppoagent = DACPPOAgent("Ant-v2")
-    ppoagent.run()
+    agent = DACPPOAgent(args.env_name)
+    agent.run()
