@@ -4,3 +4,4 @@ torchvision==0.2.1
 gym==0.10.8
 tensorflow==1.12.2
 matplotlib
+tqdm

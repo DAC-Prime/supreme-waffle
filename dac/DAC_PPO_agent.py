@@ -1,6 +1,7 @@
 import os
 import datetime
 import logging
+from tqdm import tqdm
 from enum import Enum
 
 from network import *
@@ -186,7 +187,7 @@ class DACPPOAgent:
                 self.opt.step()
 
     # use code from ppo.py here
-    def run(self):
+    def actual_run(self, progress_bar):
         states = self.states
         # print("train state shape {}".format(states.shape))
         # storage = Storage(config.rollout_length, ['adv_bar', 'adv_hat', 'ret_bar', 'ret_hat'])
@@ -230,7 +231,7 @@ class DACPPOAgent:
                 cumu_rewd += reward
                 for i in range(self.num_envs):
                     if done[i]:
-                        print("Cumulative reward at step {cur_steps} is {reward}".format(cur_steps=self.cur_steps, reward=cumu_rewd[i]))
+                        # print("Cumulative reward at step {cur_steps} is {reward}".format(cur_steps=self.cur_steps, reward=cumu_rewd[i]))
                         self.train_logger.info("{cur_steps} {reward}".format(cur_steps=self.cur_steps, reward=cumu_rewd[i]))
                         cumu_rewd[i] = 0
 
@@ -268,6 +269,7 @@ class DACPPOAgent:
                 self.prev_options = options
                 states = next_state
                 self.cur_steps += self.num_workers
+                progress_bar.update(self.num_workers)
             
             prediction = self.dac_net(states)
             pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
@@ -366,7 +368,7 @@ class DACPPOAgent:
                 stds_cache)
 
             eval_reward = np.mean([self.test_env() for _ in range(10)])
-            print("Evaluation reward at step {cur_steps} is {reward}".format(cur_steps=self.cur_steps, reward=eval_reward))
+            # print("Evaluation reward at step {cur_steps} is {reward}".format(cur_steps=self.cur_steps, reward=eval_reward))
             self.eval_logger.info("{cur_steps} {reward}".format(cur_steps=self.cur_steps, reward=eval_reward))
 
     def test_env(self, vis=False):
@@ -392,14 +394,23 @@ class DACPPOAgent:
             total_reward += reward[0]
         return total_reward
 
+    def run(self):
+        progress_bar = tqdm(total=self.max_steps)
+        try:
+            self.actual_run(progress_bar)
+        finally:
+            progress_bar.close()
+            self.envs.close()
+            self.eval_env.close()
+
 
 if __name__ == '__main__':
-    # import argparse
-    # parser = argparse.ArgumentParser(description='Run PPO on a specific game.')
-    # parser.add_argument('-e', '--env_name', type=str, help='Name of the game', default='HalfCheetah-v2')
+    import argparse
+    parser = argparse.ArgumentParser(description='Run PPO on a specific game.')
+    parser.add_argument('-e', '--env_name', type=str, help='Name of the game', default='HalfCheetah-v2')
     # parser.add_argument('-n', '--num_envs', type=int, help='Number of workers', default=1)
     # parser.add_argument('-a', '--activationF', type=str, help='Types of activation function', default='relu')
-    # args = parser.parse_args()
+    args = parser.parse_args()
     # activation_dict = {'tanh':nn.Tanh, 'relu':nn.ReLU}
-    agent = DACPPOAgent("Ant-v2")
+    agent = DACPPOAgent(args.env_name)
     agent.run()
