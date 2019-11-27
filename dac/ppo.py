@@ -9,8 +9,12 @@ import ast
 
 def init_weights(m):
     if isinstance(m, nn.Linear):
-        nn.init.normal_(m.weight, mean=0., std=1e-3)
-        nn.init.constant_(m.bias, 0)
+#        nn.init.normal_(m.weight, mean=0., std=1)
+#        nn.init.constant_(m.bias, 0)
+        nn.init.orthogonal_(m.weight.data)
+        m.weight.data.mul_(1)
+        nn.init.constant_(m.bias.data, 0)
+
 
 
 class ActorCritic(nn.Module):
@@ -52,8 +56,10 @@ def compute_gae(next_value, rewards, masks, values, gamma=0.99, tau=0.95):
 
 def ppo_iter(mini_batch_size, states, actions, log_probs, returns, advantage):
     batch_size = states.size(0)
-    for _ in range(batch_size // mini_batch_size):
-        rand_ids = np.random.randint(0, batch_size, mini_batch_size)
+    idlist = np.random.permutation(batch_size)
+    for i in range(batch_size // mini_batch_size):
+#        rand_ids = np.random.randint(0, batch_size, mini_batch_size)
+        rand_ids = idlist[i*mini_batch_size:min((i+1)*mini_batch_size, batch_size)]
         yield states[rand_ids, :], actions[rand_ids, :], log_probs[
             rand_ids, :], returns[rand_ids, :], advantage[rand_ids, :]
 
@@ -124,7 +130,10 @@ class ppo_agent():
         self.mini_batch_size = mini_batch_size
         self.ppo_epochs = ppo_epochs
         self.envs = [make_env(self.env_name) for i in range(self.num_envs)]
-        self.envs = SubprocVecEnv(self.envs)
+        if self.num_envs == 1:
+            self.envs = DummyVecEnv(self.envs)
+        else:
+            self.envs = SubprocVecEnv(self.envs)
         self.envs = VecNormalize(self.envs, ret=False)
         self.env = [make_env(self.env_name)]
         self.env = DummyVecEnv(self.env)
