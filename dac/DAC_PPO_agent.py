@@ -70,16 +70,15 @@ class DACPPOAgent:
         self.eval_logger.addHandler(logging.FileHandler("{path}/dac_ppo_eval_{curtime}.log".format(path=path, curtime=curtime), "w"))
 
     def compute_pi_h(self, prediction, pre_option, is_init_states):
-        intra_pi = prediction["master_policy"]
+        inter_pi = prediction["master_policy"]
         beta = prediction["beta"]
 
-        mask = torch.zeros_like(intra_pi)
-        # mask[pre_option, self.worker_index]
+        mask = torch.zeros_like(inter_pi)
+        mask[self.worker_index, pre_option] = 1
 
-
-        pi_h = beta * intra_pi + (1 - beta) * mask
-        is_init_states = is_init_states.view(-1, 1).expand(-1, intra_pi.size(1))
-        pi_h = torch.where(is_init_states, intra_pi, pi_h)
+        pi_h = beta * inter_pi + (1 - beta) * mask
+        is_init_states = is_init_states.view(-1, 1).expand(-1, inter_pi.size(1))
+        pi_h = torch.where(is_init_states, inter_pi, pi_h)
 
         return pi_h
 
@@ -98,11 +97,11 @@ class DACPPOAgent:
     def compute_log_pi(self, mdp_type, pi_h, options, action, mean, std):
         if mdp_type == MdpType.high:
             # return pi_hat.add(1e-5).log().gather(1, options)
-            return pi_h.log().gather(1, options)
+            return pi_h.add(1e-5).log().gather(1, options)
         elif mdp_type == MdpType.low:
             pi_l = self.compute_pi_l(options, action, mean, std)
-            # return pi_l.add(1e-5).log()
-            return pi_l.log()
+            return pi_l.add(1e-5).log()
+            # return pi_l.log()
         else:
             raise NotImplementedError
 
@@ -112,7 +111,8 @@ class DACPPOAgent:
         # adv = parameters.__getattribute__("adv_%s" % (mdp_type.value))
         # returns = parameters.__getattribute__("ret_%s" % (mdp_type.value))
 
-        adv, returns = [], []
+        adv = [None] * self.num_steps
+        returns = [None] * self.num_steps
 
         ret = values[-1].detach()
         advs = tensor(np.zeros((self.num_workers, 1)))
@@ -124,8 +124,11 @@ class DACPPOAgent:
             else:
                 td_error = rewards[i] + self.discount * (1 - dones[i]) * values[i + 1] - values[i] # td_error ?
                 advs = advs * self.gae_tau * self.discount * (1 - dones[i]) + td_error
-            adv.append(advs.detach())
-            returns.append(ret.detach())
+
+            # adv.append(advs.detach())
+            # returns.append(ret.detach())
+            adv[i] = advs.detach()
+            returns[i] = ret.detach()
 
         return adv, returns
 
