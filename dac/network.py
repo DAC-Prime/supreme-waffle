@@ -21,6 +21,7 @@ class DACNetwork(nn.Module):
         self.lower_nets = [LowerNetwork(obs_dim, action_dim) for _ in range(num_options)]
 
     def forward(self, x):
+        x = tensor(x)
         mean = []
         std = []
         beta = []
