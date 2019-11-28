@@ -4,25 +4,29 @@ import torch.nn.functional as F
 import numpy as np
 
 DEFAULT_HIDDEN_UNITS = 64
-DEVICE = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+# DEVICE = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
-def tensor(x):
+def tensor(x, device="cpu"):
     if torch.is_tensor(x):
         return x
     x = np.asarray(x, dtype=np.float)
-    x = torch.tensor(x, device=DEVICE, dtype=torch.float32)
+    x = torch.tensor(x, device=torch.device(device), dtype=torch.float32)
     return x
 
 class DACNetwork(nn.Module):
-    def __init__(self, obs_dim, action_dim, num_options):
+    def __init__(self, obs_dim, action_dim, num_options, device="cuda:0"):
         super(DACNetwork, self).__init__()
 
         self.higher_net = MasterNetwork(obs_dim, num_options)
         self.lower_nets = [LowerNetwork(obs_dim, action_dim) for _ in range(num_options)]
-        self.to(DEVICE)
+        if not torch.cuda.is_available():
+            device = "cpu"
+        print("using device: %s" % device)
+        self.device = device
+        self.to(torch.device(self.device))
 
     def forward(self, x):
-        x = tensor(x)
+        x = tensor(x, self.device)
         mean = []
         std = []
         beta = []

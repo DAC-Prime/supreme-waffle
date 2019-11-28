@@ -17,7 +17,7 @@ class MdpType(Enum):
     low = "low"
 
 class DACPPOAgent:
-    def __init__(self, env_name):
+    def __init__(self, env_name, device):
         # config
         self.num_workers = 1
         self.discount = 0.99
@@ -48,7 +48,7 @@ class DACPPOAgent:
 
         obs_dim = self.eval_env.observation_space.shape[0]
         action_dim = self.eval_env.action_space.shape[0]
-        self.dac_net = DACNetwork(obs_dim, action_dim, self.num_options)
+        self.dac_net = DACNetwork(obs_dim, action_dim, self.num_options, device=device)
         self.opt = optim.Adam(self.dac_net.parameters(),
                                     lr=3e-4,
                                     eps=1e-5)
@@ -56,7 +56,8 @@ class DACPPOAgent:
         path='./data/{}'.format(self.env_name)
         if not os.path.exists(path):
             os.makedirs(path)
-        curtime = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+        # curtime = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+        curtime = datetime.datetime.now().strftime("%Y%m%d%H%M%S") + "_{:04d}".format(random.randint(1,9999))
         self.train_logger = logging.getLogger("train")
         self.eval_logger = logging.getLogger("eval")
         self.train_logger.setLevel(logging.INFO)
@@ -429,9 +430,12 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Run PPO on a specific game.')
     parser.add_argument('-e', '--env_name', type=str, help='Name of the game', default='HalfCheetah-v2')
+    parser.add_argument("-d", "--device", type=str, help="device to run the network on", choices=["cpu", "cuda"], default="cuda")
     # parser.add_argument('-n', '--num_envs', type=int, help='Number of workers', default=1)
     # parser.add_argument('-a', '--activationF', type=str, help='Types of activation function', default='relu')
     args = parser.parse_args()
     # activation_dict = {'tanh':nn.Tanh, 'relu':nn.ReLU}
-    agent = DACPPOAgent(args.env_name)
+    if args.device == "cuda":
+        args.device = "cuda:0"
+    agent = DACPPOAgent(args.env_name, args.device)
     agent.run()
