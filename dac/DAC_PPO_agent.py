@@ -46,13 +46,8 @@ class DACPPOAgent:
         eval_env = DummyVecEnv(eval_env)
         self.eval_env = VecNormalize(eval_env, ret=False)
 
-        self.states = self.envs.reset()
-        self.eval_env.reset()
-
         obs_dim = self.eval_env.observation_space.shape[0]
         action_dim = self.eval_env.action_space.shape[0]
-        # self.options = [LowerNetwork(obs_dim, action_dim) for _ in range(self.num_options)]
-        # self.higher_policy = MasterNetwork(obs_dim, self.num_options)
         self.dac_net = DACNetwork(obs_dim, action_dim, self.num_options)
         self.opt = optim.Adam(self.dac_net.parameters(),
                                     lr=3e-4,
@@ -107,10 +102,6 @@ class DACPPOAgent:
 
 
     def compute_adv(self, values, rewards, dones):
-        # v = parameters.__getattribute__("v_%s" % (mdp_type.value))
-        # adv = parameters.__getattribute__("adv_%s" % (mdp_type.value))
-        # returns = parameters.__getattribute__("ret_%s" % (mdp_type.value))
-
         adv = [None] * self.num_steps
         returns = [None] * self.num_steps
 
@@ -136,7 +127,23 @@ class DACPPOAgent:
         batch_size = argv[0].size(0)
         for _ in range(batch_size // self.mini_batch_size):
             rand_ids = np.random.randint(0, batch_size, self.mini_batch_size)
+            # print("batch: %s" % rand_ids)
             yield (cache[rand_ids, :] for cache in argv)
+
+    def permut_iter(self, *argv):
+        batch_size = argv[0].size(0)
+        indices = np.asarray(np.random.permutation(np.arange(batch_size)))
+        batches = indices[:batch_size // self.mini_batch_size * self.mini_batch_size].reshape(-1, self.mini_batch_size)
+        for batch in batches:
+            # yield batch
+            # print("batch: %s" % batch)
+            yield (cache[batch, :] for cache in argv)
+        r = len(indices) % self.mini_batch_size
+        if r:
+            # yield indices[-r:]
+            batch = indices[-r:]
+            # print("batch: %s" % batch)
+            yield (cache[batch, :] for cache in argv)
 
     def learn(self,
               mdp_type, 
@@ -158,25 +165,29 @@ class DACPPOAgent:
         for _ in range(self.optimization_epochs):
             for sample_pi_h, sample_mean, sample_std, sample_states, sample_prev_options, sample_init_states, \
                 sample_options, sample_actions, sample_log_pi, sample_returns, sample_advs \
-                in self.random_iter(pi_h, mean, std, states, prev_options, init_states,
+                in self.permut_iter(pi_h, mean, std, states, prev_options, init_states,
                     options, actions, log_pi, returns, advs):
 
                 sample_prediction = self.dac_net(sample_states)
 
                 if mdp_type == MdpType.high:
-                    cur_pi_hat = self.compute_pi_h(sample_prediction, sample_prev_options.view(-1), sample_init_states.view(-1))
-                    entropy = -(cur_pi_hat * cur_pi_hat.add(1e-5).log()).sum(-1).mean()
-                    new_log_pi = self.compute_log_pi(mdp_type, cur_pi_hat, sample_options, sample_actions, sample_mean, sample_std)
+                    cur_pi_h = self.compute_pi_h(sample_prediction, sample_prev_options.view(-1), sample_init_states.view(-1))
+                    entropy = -(cur_pi_h * cur_pi_h.add(1e-6).log()).sum(-1).mean()
+                    new_log_pi = self.compute_log_pi(mdp_type, cur_pi_h, sample_options, sample_actions, sample_mean, sample_std)
                     beta_loss = sample_prediction["beta"].mean()
-                else:
-                    new_log_pi = self.compute_log_pi(mdp_type, sample_pi_h, sample_options, sample_actions, sample_mean, sample_std)
+                elif mdp_type == MdpType.low:
+                    new_log_pi = self.compute_log_pi(mdp_type, sample_pi_h, sample_options, sample_actions, sample_prediction["mean"], sample_prediction["std"])
                     entropy = 0
                     beta_loss = 0
+                else:
+                    raise NotImplementedError
                 
                 if mdp_type == MdpType.high:
                     value = sample_prediction["q_option"].gather(1, sample_options)
-                else:
+                elif mdp_type == MdpType.low:
                     value = (sample_prediction["q_option"] * sample_pi_h).sum(-1).unsqueeze(-1)
+                else:
+                    raise NotImplementedError
                 
                 ratio = (new_log_pi - sample_log_pi).exp() # not use log maybe
                 objective = ratio * sample_advs
@@ -191,7 +202,7 @@ class DACPPOAgent:
 
     # use code from ppo.py here
     def actual_run(self, progress_bar):
-        states = self.states
+        states = self.envs.reset()
         # print("train state shape {}".format(states.shape))
         # storage = Storage(config.rollout_length, ['adv_bar', 'adv_hat', 'ret_bar', 'ret_hat'])
         cumu_rewd = np.zeros(self.num_envs)
@@ -231,6 +242,7 @@ class DACPPOAgent:
 
                 # print("train action shape {}".format(actions.shape))
                 next_state, reward, done, info = self.envs.step(actions) # done: terminated
+
                 cumu_rewd += reward
                 for i in range(self.num_envs):
                     if done[i]:
@@ -268,7 +280,7 @@ class DACPPOAgent:
                 means_cache.append(prediction["mean"])
                 stds_cache.append(prediction["std"])
 
-                self.is_initial_states = tensor(done).byte()
+                self.is_init_states = tensor(done).byte()
                 self.prev_options = options
                 states = next_state
                 self.cur_steps += self.num_workers
@@ -280,11 +292,11 @@ class DACPPOAgent:
 
             # maybe need add log here
 
-            mean = prediction['mean'][self.worker_index, options]
-            std = prediction['std'][self.worker_index, options]
-            actions = torch.distributions.Normal(mean, std).sample()
+            # mean = prediction['mean'][self.worker_index, options]
+            # std = prediction['std'][self.worker_index, options]
+            # actions = torch.distributions.Normal(mean, std).sample()
 
-            pi_l = self.compute_pi_l(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
+            # pi_l = self.compute_pi_l(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
 
             value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
             value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
@@ -378,13 +390,16 @@ class DACPPOAgent:
         state = self.eval_env.reset()
         if vis:
             self.eval_env.render()
+
+        is_init_states_test = tensor(np.ones((self.num_workers))).byte()
+        prev_options_test = tensor(np.zeros(self.num_workers)).long()
         done = False
         total_reward = 0
         while not done:
             # print("eval state shape {}".format(state.shape))
 
             prediction = self.dac_net(state)
-            pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
+            pi_h = self.compute_pi_h(prediction, prev_options_test, is_init_states_test)
             options = torch.distributions.Categorical(probs = pi_h).sample()
             mean = prediction['mean'][self.worker_index, options]
             std = prediction['std'][self.worker_index, options]
@@ -392,6 +407,9 @@ class DACPPOAgent:
 
             next_state, reward, done, _ = self.eval_env.step(action)
             state = next_state
+            is_init_states_test = tensor(done).byte()
+            prev_options_test = options
+
             if vis:
                 env.render()
             total_reward += reward[0]
