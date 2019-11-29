@@ -13,16 +13,23 @@ def tensor(x, device="cpu"):
     x = torch.tensor(x, device=torch.device(device), dtype=torch.float32)
     return x
 
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        nn.init.orthogonal_(m.weight.data)
+        m.weight.data.mul_(1)
+        nn.init.constant_(m.bias.data, 0)
+
 class DACNetwork(nn.Module):
     def __init__(self, obs_dim, action_dim, num_options, device="cuda:0"):
         super(DACNetwork, self).__init__()
 
         self.higher_net = MasterNetwork(obs_dim, num_options)
-        self.lower_nets = [LowerNetwork(obs_dim, action_dim) for _ in range(num_options)]
+        self.lower_nets = nn.ModuleList([LowerNetwork(obs_dim, action_dim) for _ in range(num_options)])
         if not torch.cuda.is_available():
             device = "cpu"
         print("using device: %s" % device)
         self.device = device
+        self.apply(init_weights)
         self.to(torch.device(self.device))
 
     def forward(self, x):
@@ -90,7 +97,7 @@ class LowerNetwork(nn.Module):
 class FCNetwork(nn.Module):
     def __init__(self,
         input_dim, output_dim, output_activation=None,
-        hidden_dims=(DEFAULT_HIDDEN_UNITS, DEFAULT_HIDDEN_UNITS), hidden_activation=nn.Tanh
+        hidden_dims=(DEFAULT_HIDDEN_UNITS, DEFAULT_HIDDEN_UNITS), hidden_activation=nn.ReLU
     ):
         super(FCNetwork, self).__init__()
 
