@@ -13,9 +13,11 @@ def cat(x, size):
     x = x[:size]
     return torch.cat(x).detach()
 
+
 class MdpType(Enum):
     high = "high"
     low = "low"
+
 
 class DACPPOAgent:
     def __init__(self, env_name, device, steps=2e6):
@@ -68,6 +70,7 @@ class DACPPOAgent:
         self.train_logger.addHandler(logging.FileHandler("{path}/dac_ppo_train_{curtime}.log".format(path=path, curtime=curtime), "w"))
         self.eval_logger.addHandler(logging.FileHandler("{path}/dac_ppo_eval_{curtime}.log".format(path=path, curtime=curtime), "w"))
 
+
     def compute_pi_h(self, prediction, pre_option, is_init_states):
         master_policy = prediction["master_policy"]
         beta = prediction["beta"]
@@ -75,9 +78,9 @@ class DACPPOAgent:
         mask = torch.zeros_like(master_policy)
         mask[self.worker_index, pre_option] = 1
 
-        pi_h = beta * master_policy + (1 - beta) * mask
+        # pi_h = beta * master_policy + (1 - beta) * mask
         is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
-        pi_h = torch.where(is_init_states, master_policy, pi_h)
+        pi_h = torch.where(is_init_states, master_policy, beta * master_policy + (1 - beta) * mask)
         # print("pi_h %s" % pi_h)
 
         return pi_h
@@ -121,11 +124,13 @@ class DACPPOAgent:
 
         return advantanges, returns
 
+
     def random_iter(self, *argv):
         batch_size = argv[0].size(0)
         for _ in range(batch_size // self.mini_batch_size):
             rand_ids = np.random.randint(0, batch_size, self.mini_batch_size)
             yield (cache[rand_ids, :] for cache in argv)
+
 
     def permut_iter(self, *argv):
         batch_size = argv[0].size(0)
@@ -203,6 +208,7 @@ class DACPPOAgent:
                 torch.nn.utils.clip_grad_norm_(self.dac_net.parameters(), 0.5)
                 self.opt.step()
 
+
     # use code from ppo.py here
     def actual_run(self, progress_bar):
         # print("running")
@@ -245,6 +251,9 @@ class DACPPOAgent:
                 value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
 
                 # print("train action shape {}".format(actions.shape))
+                #next_state, reward, done, info = self.envs.step(actions) # done: terminated
+
+                # seems info is not needed
                 next_state, reward, done, info = self.envs.step(actions) # done: terminated
 
                 cumu_rewd += reward
@@ -313,8 +322,6 @@ class DACPPOAgent:
 
             mdp_types = [MdpType.high, MdpType.low]
             np.random.shuffle(mdp_types)
-            # self.learn(storage, mdp_types[0])
-            # self.learn(storage, mdp_types[1])
 
             def helper(mdp_type):
                 if mdp_type == MdpType.high:
@@ -337,6 +344,7 @@ class DACPPOAgent:
                 pi_h_cache,
                 means_cache,
                 stds_cache)
+
             log_pi_cache, returns_cache, adv_cache = helper(mdp_types[1])
             self.learn(
                 mdp_types[1],
@@ -356,6 +364,7 @@ class DACPPOAgent:
             eval_reward = np.mean([self.test_env() for _ in range(10)])
             print("Evaluation reward at step {cur_steps} is {reward}".format(cur_steps=self.cur_steps, reward=eval_reward))
             self.eval_logger.info("{cur_steps} {reward}".format(cur_steps=self.cur_steps, reward=eval_reward))
+
 
     def test_env(self, vis=False):
         state = self.eval_env.reset()
@@ -385,6 +394,7 @@ class DACPPOAgent:
                 env.render()
             total_reward += reward[0]
         return total_reward
+
 
     def run(self):
         progress_bar = tqdm(total=self.max_steps)
