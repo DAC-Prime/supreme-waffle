@@ -47,10 +47,11 @@ from baselines.common.vec_env.vec_normalize import VecNormalize
 #     return _make
 
 
-def make_env(env_name: str):
+def make_env(env_name: str, rank=0):
     def _thunk():
         env = gym.make(env_name)
-        # env.seed(1)
+#        env.seed(1)
+        env.seed(np.random.randint(1e5)+rank)
         return env
 
     return _thunk
