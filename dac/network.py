@@ -97,7 +97,7 @@ class LowerNetwork(nn.Module):
 class FCNetwork(nn.Module):
     def __init__(self,
         input_dim, output_dim, output_activation=None,
-        hidden_dims=(DEFAULT_HIDDEN_UNITS, DEFAULT_HIDDEN_UNITS), hidden_activation=nn.ReLU
+        hidden_dims=(DEFAULT_HIDDEN_UNITS, DEFAULT_HIDDEN_UNITS), hidden_activation=nn.Tanh
     ):
         super(FCNetwork, self).__init__()
 
