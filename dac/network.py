@@ -19,6 +19,7 @@ class DACNetwork(nn.Module):
 
         self.higher_net = MasterNetwork(obs_dim, num_options)
         self.lower_nets = [LowerNetwork(obs_dim, action_dim) for _ in range(num_options)]
+        self.to(DEVICE)
 
     def forward(self, x):
         mean = []
