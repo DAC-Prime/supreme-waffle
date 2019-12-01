@@ -138,7 +138,7 @@ class oc_agent():
             print(error)
         curtime = datetime.datetime.now().strftime("%Y%m%d%H%M%S") \
                     + "_{:04d}".format(random.randint(1,9999))
-        fd_train = open(path + '/ppo_train_{}.log'.format(curtime), 'w')
+        fd_train = open(path + '/ppoc_train_{}.log'.format(curtime), 'w')
         while frame_idx < self.max_frames:
             log_probs = []
 
@@ -240,7 +240,7 @@ class oc_agent():
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser(description='Run PPO on a specific game.')
+    parser = argparse.ArgumentParser(description='Run PPOC on a specific game.')
     parser.add_argument('-e', '--env_name', type=str, help='Name of the game', default='HalfCheetah-v2')
     parser.add_argument('-n', '--num_envs', type=int, help='Number of workers', default=1)
     args = parser.parse_args()

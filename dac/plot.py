@@ -36,7 +36,8 @@ def load_results(data_path):
         data = np.loadtxt(data_path)
         data_path = data_path.split('/')
         # :-24 is to remove the previous datetime string
-        return data, data_path[-1][:-24], data_path[-2]
+        # :-30 is to remove the train label
+        return data, data_path[-1][:-30], data_path[-2]
     else:
         print('Please enter a valid data path.')
         exit()
@@ -108,7 +109,9 @@ def plot(data, filenames, game, destination, num_interplt):
         print('{} results have been found.'.format(len(filenames)))
         agents = []
         for i in range(len(filenames)):
-            agents.append(filenames[i][:-24])
+        # :-24 is to remove the previous datetime string
+        # :-30 is to remove the train label
+            agents.append(filenames[i][:-30])
         uni_agents = np.unique(np.array(agents))
         print('Game result from agent: {}'.format(uni_agents))
         fig = plt.figure()
