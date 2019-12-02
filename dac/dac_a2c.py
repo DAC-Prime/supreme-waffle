@@ -249,21 +249,17 @@ class DACA2CAgent:
 
     def get_policy_high(self, prediction, pre_option, is_init_states):
         master_policy = prediction["master_policy"]
-        termination_prob = prediction["beta"]
-
         mask = torch.zeros_like(master_policy)
         mask[self.worker_index, pre_option] = 1
-
         is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
+        termination_prob = prediction["beta"]
         return torch.where(is_init_states, master_policy, termination_prob * master_policy + (1 - termination_prob) * mask)
 
     def get_policy_low(self, options, action, mean, std):
         options = options.unsqueeze(-1).expand(-1, -1, mean.size(-1))
         mean = mean.gather(1, options).squeeze(1)
         std = std.gather(1, options).squeeze(1)
-        normal_dis = torch.distributions.Normal(mean, std)
-        
-        return normal_dis.log_prob(action).sum(-1).exp().unsqueeze(-1)
+        return torch.distributions.Normal(mean, std).log_prob(action).sum(-1).exp().unsqueeze(-1)
 
     def compute_adv_return(self, values, rewards, dones):
         advantanges = [None] * self.num_steps
