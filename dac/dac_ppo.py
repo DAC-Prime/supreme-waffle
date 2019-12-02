@@ -24,7 +24,6 @@ class DACPPOAgent:
         # config
         self.num_workers = 1
         self.discount = 0.99
-        self.use_gae = True
         self.gae_tau = 0.95
         self.optimization_epochs = 5
         # self.optimization_epochs = 50
@@ -71,150 +70,20 @@ class DACPPOAgent:
         self.eval_logger.addHandler(logging.FileHandler("{path}/dac_ppo_eval_{curtime}.log".format(path=path, curtime=curtime), "w"))
 
 
-    def compute_pi_h(self, prediction, pre_option, is_init_states):
-        master_policy = prediction["master_policy"]
-        beta = prediction["beta"]
-
-        mask = torch.zeros_like(master_policy)
-        mask[self.worker_index, pre_option] = 1
-
-        # pi_h = beta * master_policy + (1 - beta) * mask
-        is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
-        pi_h = torch.where(is_init_states, master_policy, beta * master_policy + (1 - beta) * mask)
-        # print("pi_h %s" % pi_h)
-
-        return pi_h
-
-
-    def compute_pi_l(self, options, action, mean, std):
-        options = options.unsqueeze(-1).expand(-1, -1, mean.size(-1))
-        mean = mean.gather(1, options).squeeze(1)
-        std = std.gather(1, options).squeeze(1)
-        normal_dis = torch.distributions.Normal(mean, std)
-        
-        pi_l = normal_dis.log_prob(action).sum(-1).exp().unsqueeze(-1)
-
-        return pi_l
-
-
-    def compute_log_pi(self, mdp_type, pi_h, options, action, mean, std):
-        if mdp_type == MdpType.high:
-            return pi_h.add(1e-5).log().gather(1, options)
-        elif mdp_type == MdpType.low:
-            pi_l = self.compute_pi_l(options, action, mean, std)
-            return pi_l.add(1e-5).log()
-        else:
-            raise NotImplementedError
-
-
-    def compute_adv(self, values, rewards, dones):
-        advantanges = [None] * self.num_steps
-        returns = [None] * self.num_steps
-
-        ret = values[-1].detach() # TODO: or this
-        adv = tensor(np.zeros((self.num_workers, 1)))
-        for i in reversed(range(self.num_steps)):
-            ret = rewards[i] + self.discount * (1 - dones[i]) * ret # TODO: or this
-            td_error = rewards[i] + self.discount * (1 - dones[i]) * values[i + 1] - values[i] # td_error ?
-            adv = td_error + self.discount * self.gae_tau * (1 - dones[i]) * adv
-            # ret = adv + values[i] # TODO: maybe not this
-
-            advantanges[i] = adv.detach()
-            returns[i] = ret.detach()
-
-        return advantanges, returns
-
-
-    def random_iter(self, *argv):
-        batch_size = argv[0].size(0)
-        for _ in range(batch_size // self.mini_batch_size):
-            rand_ids = np.random.randint(0, batch_size, self.mini_batch_size)
-            yield (cache[rand_ids, :] for cache in argv)
-
-
-    def permut_iter(self, *argv):
-        batch_size = argv[0].size(0)
-        indices = np.asarray(np.random.permutation(np.arange(batch_size)))
-        batches = indices[:batch_size // self.mini_batch_size * self.mini_batch_size].reshape(-1, self.mini_batch_size)
-        for batch in batches:
-            # yield batch
-            # print("batch: %s" % batch)
-            yield (cache[batch, :] for cache in argv)
-        r = len(indices) % self.mini_batch_size
-        if r:
-            # yield indices[-r:]
-            batch = indices[-r:]
-            # print("batch: %s" % batch)
-            yield (cache[batch, :] for cache in argv)
-
-    def learn(self,
-              mdp_type, 
-              rewards,
-              states,
-              actions,
-              options,
-              log_pi,
-              returns,
-              advs,
-              prev_options,
-              init_states,
-              pi_h,
-              mean,
-              std):
-
-        # print("learning")
-        advs = (advs - advs.mean()) / advs.std()
-
-        for blah in range(self.optimization_epochs):
-            # print("optimization epoch %s" % blah)
-            for sample_pi_h, sample_mean, sample_std, sample_states, sample_prev_options, sample_init_states, \
-                sample_options, sample_actions, sample_log_pi, sample_returns, sample_advs \
-                in self.permut_iter(pi_h, mean, std, states, prev_options, init_states,
-                    options, actions, log_pi, returns, advs):
-
-                sample_prediction = self.dac_net(sample_states)
-
-                if mdp_type == MdpType.high:
-                    cur_pi_h = self.compute_pi_h(sample_prediction, sample_prev_options.view(-1), sample_init_states.view(-1))
-                    # entropy = -(cur_pi_h * cur_pi_h.add(1e-5).log()).sum(-1).mean()
-                    new_log_pi = self.compute_log_pi(mdp_type, cur_pi_h, sample_options, sample_actions, sample_mean, sample_std)
-                    # beta_loss = sample_prediction["beta"].mean()
-                elif mdp_type == MdpType.low:
-                    new_log_pi = self.compute_log_pi(mdp_type, sample_pi_h, sample_options, sample_actions, sample_prediction["mean"], sample_prediction["std"])
-                    # entropy = 0
-                    # beta_loss = 0
-                else:
-                    raise NotImplementedError
-                
-                if mdp_type == MdpType.high:
-                    value = sample_prediction["q_option"].gather(1, sample_options)
-                elif mdp_type == MdpType.low:
-                    value = (sample_prediction["q_option"] * sample_pi_h).sum(-1).unsqueeze(-1)
-                else:
-                    raise NotImplementedError
-                
-                ratio = (new_log_pi - sample_log_pi).exp() # not use log maybe
-                objective = ratio * sample_advs
-                objective_clipped = ratio.clamp(1.0 - self.ppo_clip_param, 1.0 + self.ppo_clip_param) * sample_advs
-
-                policy_loss = -torch.min(objective, objective_clipped).mean() # + 0.01 * entropy
-                value_loss = 0.5 * (sample_returns - value).pow(2).mean()
-
-                # a_h = list(self.dac_net.higher_net.parameters())[0].clone()
-                # a_l = list(self.dac_net.lower_nets.parameters())[0].clone()
-
-                self.opt.zero_grad()
-                (policy_loss + value_loss).backward()
-                torch.nn.utils.clip_grad_norm_(self.dac_net.parameters(), 0.5)
-                self.opt.step()
-
+    def run(self):
+        progress_bar = tqdm(total=self.max_steps)
+        try:
+            self.actual_run(progress_bar)
+        finally:
+            progress_bar.close()
+            self.envs.close()
+            self.eval_env.close()
 
     # use code from ppo.py here
     def actual_run(self, progress_bar):
         # print("running")
         states = self.envs.reset()
         # print("train state shape {}".format(states.shape))
-        # storage = Storage(config.rollout_length, ['adv_bar', 'adv_hat', 'ret_bar', 'ret_hat'])
         cumu_rewd = np.zeros(self.num_envs)
 
         while self.cur_steps <= self.max_steps:
@@ -236,7 +105,7 @@ class DACPPOAgent:
             for _ in range(self.num_steps):
                 # print(self.cur_steps)
                 prediction = self.dac_net(states)
-                pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
+                pi_h = self.get_policy_high(prediction, self.prev_options, self.is_init_states)
                 options = torch.distributions.Categorical(probs = pi_h).sample()
 
                 # maybe need add log here
@@ -245,7 +114,7 @@ class DACPPOAgent:
                 std = prediction['std'][self.worker_index, options]
                 actions = torch.distributions.Normal(mean, std).sample()
 
-                pi_l = self.compute_pi_l(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
+                pi_l = self.get_policy_low(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
 
                 value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
                 value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
@@ -285,7 +154,7 @@ class DACPPOAgent:
                 progress_bar.update(self.num_workers)
             
             prediction = self.dac_net(states)
-            pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
+            pi_h = self.get_policy_high(prediction, self.prev_options, self.is_init_states)
             options = torch.distributions.Categorical(probs = pi_h).sample()
 
             value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
@@ -297,9 +166,9 @@ class DACPPOAgent:
             stds_cache.append(prediction["std"])
 
             # computer advantange
-            adv_h_cache, returns_h_cache = self.compute_adv(value_h_cache, rewards_cache, dones_cache)
+            adv_h_cache, returns_h_cache = self.compute_adv_return(value_h_cache, rewards_cache, dones_cache)
             # print("adv_h_cache len %s" % len(adv_h_cache))
-            adv_l_cache, returns_l_cache = self.compute_adv(value_l_cache, rewards_cache, dones_cache)
+            adv_l_cache, returns_l_cache = self.compute_adv_return(value_l_cache, rewards_cache, dones_cache)
 
             rewards_cache = cat(rewards_cache, self.num_steps)
             states_cache = cat(states_cache, self.num_steps)
@@ -379,7 +248,7 @@ class DACPPOAgent:
             # print("eval state shape {}".format(state.shape))
 
             prediction = self.dac_net(state)
-            pi_h = self.compute_pi_h(prediction, prev_options_test, is_init_states_test)
+            pi_h = self.get_policy_high(prediction, prev_options_test, is_init_states_test)
             options = torch.distributions.Categorical(probs = pi_h).sample()
             mean = prediction['mean'][self.worker_index, options]
             std = prediction['std'][self.worker_index, options]
@@ -396,14 +265,132 @@ class DACPPOAgent:
         return total_reward
 
 
-    def run(self):
-        progress_bar = tqdm(total=self.max_steps)
-        try:
-            self.actual_run(progress_bar)
-        finally:
-            progress_bar.close()
-            self.envs.close()
-            self.eval_env.close()
+    def learn(self,
+              mdp_type, 
+              rewards,
+              states,
+              actions,
+              options,
+              log_pi,
+              returns,
+              advs,
+              prev_options,
+              init_states,
+              pi_h,
+              mean,
+              std):
+
+        # print("learning")
+        advs = (advs - advs.mean()) / advs.std()
+
+        for blah in range(self.optimization_epochs):
+            # print("optimization epoch %s" % blah)
+            for sample_pi_h, sample_mean, sample_std, sample_states, sample_prev_options, sample_init_states, \
+                sample_options, sample_actions, sample_log_pi, sample_returns, sample_advs \
+                in self.permut_iter(pi_h, mean, std, states, prev_options, init_states,
+                    options, actions, log_pi, returns, advs):
+
+                sample_prediction = self.dac_net(sample_states)
+
+                if mdp_type == MdpType.high:
+                    cur_pi_h = self.get_policy_high(sample_prediction, sample_prev_options.view(-1), sample_init_states.view(-1))
+                    new_log_pi = self.get_log_pi(mdp_type, cur_pi_h, sample_options, sample_actions, sample_mean, sample_std)
+                elif mdp_type == MdpType.low:
+                    new_log_pi = self.get_log_pi(mdp_type, sample_pi_h, sample_options, sample_actions, sample_prediction["mean"], sample_prediction["std"])
+                else:
+                    raise NotImplementedError
+                
+                if mdp_type == MdpType.high:
+                    value = sample_prediction["q_option"].gather(1, sample_options)
+                elif mdp_type == MdpType.low:
+                    value = (sample_prediction["q_option"] * sample_pi_h).sum(-1).unsqueeze(-1)
+                else:
+                    raise NotImplementedError
+                
+                ratio = (new_log_pi - sample_log_pi).exp() # not use log maybe
+                objective = ratio * sample_advs
+                objective_clipped = ratio.clamp(1.0 - self.ppo_clip_param, 1.0 + self.ppo_clip_param) * sample_advs
+
+                policy_loss = -torch.min(objective, objective_clipped).mean()
+                value_loss = 0.5 * (sample_returns - value).pow(2).mean()
+
+                # a_h = list(self.dac_net.higher_net.parameters())[0].clone()
+                # a_l = list(self.dac_net.lower_nets.parameters())[0].clone()
+
+                self.opt.zero_grad()
+                (policy_loss + value_loss).backward()
+                torch.nn.utils.clip_grad_norm_(self.dac_net.parameters(), 0.5)
+                self.opt.step()
+
+    def random_iter(self, *argv):
+        batch_size = argv[0].size(0)
+        for _ in range(batch_size // self.mini_batch_size):
+            rand_ids = np.random.randint(0, batch_size, self.mini_batch_size)
+            yield (cache[rand_ids, :] for cache in argv)
+
+
+    def permut_iter(self, *argv):
+        batch_size = argv[0].size(0)
+        indices = np.asarray(np.random.permutation(np.arange(batch_size)))
+        batches = indices[:batch_size // self.mini_batch_size * self.mini_batch_size].reshape(-1, self.mini_batch_size)
+        for batch in batches:
+            # yield batch
+            # print("batch: %s" % batch)
+            yield (cache[batch, :] for cache in argv)
+        r = len(indices) % self.mini_batch_size
+        if r:
+            # yield indices[-r:]
+            batch = indices[-r:]
+            # print("batch: %s" % batch)
+            yield (cache[batch, :] for cache in argv)
+
+
+    def get_policy_high(self, prediction, pre_option, is_init_states):
+        master_policy = prediction["master_policy"]
+        termination_prob = prediction["beta"]
+
+        mask = torch.zeros_like(master_policy)
+        mask[self.worker_index, pre_option] = 1
+
+        is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
+        return torch.where(is_init_states, master_policy, termination_prob * master_policy + (1 - termination_prob) * mask)
+
+
+    def get_policy_low(self, options, action, mean, std):
+        options = options.unsqueeze(-1).expand(-1, -1, mean.size(-1))
+        mean = mean.gather(1, options).squeeze(1)
+        std = std.gather(1, options).squeeze(1)
+        normal_dis = torch.distributions.Normal(mean, std)
+        
+        return normal_dis.log_prob(action).sum(-1).exp().unsqueeze(-1)
+
+
+    def get_log_pi(self, mdp_type, pi_h, options, action, mean, std):
+        if mdp_type == MdpType.high:
+            return pi_h.add(1e-5).log().gather(1, options)
+        elif mdp_type == MdpType.low:
+            pi_l = self.get_policy_low(options, action, mean, std)
+            return pi_l.add(1e-5).log()
+        else:
+            raise NotImplementedError
+
+
+    def compute_adv_return(self, values, rewards, dones):
+        advantanges = [None] * self.num_steps
+        returns = [None] * self.num_steps
+
+        # ret = values[-1].detach() # TODO: or this
+        adv = tensor(np.zeros((self.num_workers, 1)))
+        for i in reversed(range(self.num_steps)):
+            # ret = rewards[i] + self.discount * (1 - dones[i]) * ret # TODO: or this
+            delta = rewards[i] + self.discount * (1 - dones[i]) * values[i + 1] - values[i] # delta ?
+            adv = delta + self.discount * self.gae_tau * (1 - dones[i]) * adv
+            ret = adv + values[i] # TODO: maybe not this
+
+            advantanges[i] = adv.detach()
+            returns[i] = ret.detach()
+
+        return advantanges, returns
 
 
 if __name__ == '__main__':

@@ -27,7 +27,6 @@ class DACA2CAgent:
         # config
         self.num_workers = 4
         self.discount = 0.99
-        self.use_gae = True
         self.gae_tau = 0.95
         self.optimization_epochs = 5
         self.ppo_clip_param = 0.2
@@ -69,95 +68,20 @@ class DACA2CAgent:
         self.train_logger.addHandler(logging.FileHandler("{path}/dac_a2c_train_{curtime}.log".format(path=path, curtime=curtime), "w"))
         # self.eval_logger.addHandler(logging.FileHandler("{path}/dac_ppo_eval_{curtime}.log".format(path=path, curtime=curtime), "w"))
 
-
-    def compute_pi_h(self, prediction, pre_option, is_init_states):
-        master_policy = prediction["master_policy"]
-        beta = prediction["beta"]
-
-        mask = torch.zeros_like(master_policy)
-        mask[self.worker_index, pre_option] = 1
-
-        # pi_h = beta * master_policy + (1 - beta) * mask
-        is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
-        pi_h = torch.where(is_init_states, master_policy, beta * master_policy + (1 - beta) * mask)
-        # print("pi_h %s" % pi_h)
-
-        return pi_h
-
-
-    def compute_pi_l(self, options, action, mean, std):
-        options = options.unsqueeze(-1).expand(-1, -1, mean.size(-1))
-        mean = mean.gather(1, options).squeeze(1)
-        std = std.gather(1, options).squeeze(1)
-        normal_dis = torch.distributions.Normal(mean, std)
-        
-        pi_l = normal_dis.log_prob(action).sum(-1).exp().unsqueeze(-1)
-
-        return pi_l
-
-
-    def compute_log_pi(self, mdp_type, pi_h, options, action, mean, std):
-        if mdp_type == MdpType.high:
-            return pi_h.add(1e-5).log().gather(1, options)
-        elif mdp_type == MdpType.low:
-            pi_l = self.compute_pi_l(options, action, mean, std)
-            return pi_l.add(1e-5).log()
-        else:
-            raise NotImplementedError
-
-
-    def compute_adv(self, values, rewards, dones):
-        advantanges = [None] * self.num_steps
-        returns = [None] * self.num_steps
-
-        ret = values[-1].detach() # TODO: or this
-        adv = tensor(np.zeros((self.num_workers, 1)))
-        for i in reversed(range(self.num_steps)):
-            ret = rewards[i] + self.discount * (1 - dones[i]) * ret # TODO: or this
-            td_error = rewards[i] + self.discount * (1 - dones[i]) * values[i + 1] - values[i] # td_error ?
-            adv = td_error + self.discount * self.gae_tau * (1 - dones[i]) * adv
-            # ret = adv + values[i] # TODO: maybe not this
-
-            advantanges[i] = adv.detach()
-            returns[i] = ret.detach()
-
-        return advantanges, returns
-
-
-    def compute_loss(self,
-              mdp_type, 
-              log_pi,#
-              value, # v
-              returns, #
-              advs, #
-              pi_h #
-              ):
-
-        # print("learning")
-        advs = (advs - advs.mean()) / advs.std() # not sure
-
-        if mdp_type == MdpType.high:
-            entropy = -(pi_h * pi_h.add(1e-5).log()).sum(-1).mean()
-        elif mdp_type == MdpType.low:
-            entropy = 0
-        else:
-            raise NotImplementedError
-
-        # policy_loss = -torch.min(objective, objective_clipped).mean() # + 0.01 * entropy
-        # value_loss = 0.5 * (sample_returns - value).pow(2).mean()
-        policy_loss = -(log_pi * advs.detach()).mean()# - self.entropy_weight * entropy # detach() ?
-        value_loss = (value - returns.detach()).pow(2).mul(0.5).mean()
-
-        loss = policy_loss + value_loss
-        return loss
-
+    def run(self):
+        progress_bar = tqdm(total=self.max_steps)
+        try:
+            self.actual_run(progress_bar)
+        finally:
+            progress_bar.close()
+            self.envs.close()
+            self.eval_env.close()
 
     # use code from ppo.py here
     def actual_run(self, progress_bar):
         # print("running")
         states = self.envs.reset()
         # print("train state shape {}".format(states.shape))
-        # storage = Storage(config.rollout_length, ['adv_bar', 'adv_hat', 'ret_bar', 'ret_hat'])
         cumu_rewd = np.zeros(self.num_envs)
 
         while self.cur_steps <= self.max_steps:
@@ -172,7 +96,7 @@ class DACA2CAgent:
             for _ in range(self.num_steps):
                 # print(self.cur_steps)
                 prediction = self.dac_net(states)
-                pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
+                pi_h = self.get_policy_high(prediction, self.prev_options, self.is_init_states)
                 options = torch.distributions.Categorical(probs = pi_h).sample()
 
                 # maybe need add log here
@@ -194,7 +118,7 @@ class DACA2CAgent:
                         self.train_logger.info("{cur_steps} {reward}".format(cur_steps=self.cur_steps, reward=cumu_rewd[i]))
                         cumu_rewd[i] = 0
 
-                pi_l = self.compute_pi_l(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
+                pi_l = self.get_policy_low(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
 
                 value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
                 value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
@@ -214,7 +138,7 @@ class DACA2CAgent:
                 progress_bar.update(self.num_workers)
             
             prediction = self.dac_net(states)
-            pi_h = self.compute_pi_h(prediction, self.prev_options, self.is_init_states)
+            pi_h = self.get_policy_high(prediction, self.prev_options, self.is_init_states)
             options = torch.distributions.Categorical(probs = pi_h).sample()
 
             value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
@@ -224,9 +148,9 @@ class DACA2CAgent:
             value_l_cache.append(value_l)
 
             # computer advantange
-            adv_h_cache, returns_h_cache = self.compute_adv(value_h_cache, rewards_cache, dones_cache)
+            adv_h_cache, returns_h_cache = self.compute_adv_return(value_h_cache, rewards_cache, dones_cache)
             # print("adv_h_cache len %s" % len(adv_h_cache))
-            adv_l_cache, returns_l_cache = self.compute_adv(value_l_cache, rewards_cache, dones_cache)
+            adv_l_cache, returns_l_cache = self.compute_adv_return(value_l_cache, rewards_cache, dones_cache)
 
             pi_h_cache = cat(pi_h_cache, self.num_steps)
             log_pi_h_cache = cat(log_pi_h_cache, self.num_steps)
@@ -250,22 +174,18 @@ class DACA2CAgent:
 
             log_pi_cache, value_cache, returns_cache, adv_cache = helper(mdp_types[0])
             loss1 = self.compute_loss(
-                mdp_types[0],
                 log_pi_cache,
                 value_cache,
                 returns_cache,
-                adv_cache,
-                pi_h_cache
+                adv_cache
                 )
 
             log_pi_cache, value_cache, returns_cache, adv_cache = helper(mdp_types[1])
             loss2 = self.compute_loss(
-                mdp_types[1],
                 log_pi_cache,
                 value_cache,
                 returns_cache,
-                adv_cache,
-                pi_h_cache
+                adv_cache
                 )
 
             self.opt.zero_grad()
@@ -292,7 +212,7 @@ class DACA2CAgent:
             # print("eval state shape {}".format(state.shape))
 
             prediction = self.dac_net(state)
-            pi_h = self.compute_pi_h(prediction, prev_options_test, is_init_states_test)
+            pi_h = self.get_policy_high(prediction, prev_options_test, is_init_states_test)
             options = torch.distributions.Categorical(probs = pi_h).sample()
             mean = prediction['mean'][self.worker_index, options]
             std = prediction['std'][self.worker_index, options]
@@ -308,15 +228,57 @@ class DACA2CAgent:
             total_reward += reward[0]
         return total_reward
 
+    def compute_loss(self,
+              log_pi,#
+              value, # v
+              returns, #
+              advs #
+              ):
 
-    def run(self):
-        progress_bar = tqdm(total=self.max_steps)
-        try:
-            self.actual_run(progress_bar)
-        finally:
-            progress_bar.close()
-            self.envs.close()
-            self.eval_env.close()
+        # print("learning")
+        advs = (advs - advs.mean()) / advs.std() # not sure
+
+        # policy_loss = -torch.min(objective, objective_clipped).mean() # + 0.01 * entropy
+        # value_loss = 0.5 * (sample_returns - value).pow(2).mean()
+        policy_loss = -(log_pi * advs.detach()).mean()
+        value_loss = (value - returns.detach()).pow(2).mul(0.5).mean()
+
+        loss = policy_loss + value_loss
+        return loss
+
+
+    def get_policy_high(self, prediction, pre_option, is_init_states):
+        master_policy = prediction["master_policy"]
+        termination_prob = prediction["beta"]
+
+        mask = torch.zeros_like(master_policy)
+        mask[self.worker_index, pre_option] = 1
+
+        is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
+        return torch.where(is_init_states, master_policy, termination_prob * master_policy + (1 - termination_prob) * mask)
+
+    def get_policy_low(self, options, action, mean, std):
+        options = options.unsqueeze(-1).expand(-1, -1, mean.size(-1))
+        mean = mean.gather(1, options).squeeze(1)
+        std = std.gather(1, options).squeeze(1)
+        normal_dis = torch.distributions.Normal(mean, std)
+        
+        return normal_dis.log_prob(action).sum(-1).exp().unsqueeze(-1)
+
+    def compute_adv_return(self, values, rewards, dones):
+        advantanges = [None] * self.num_steps
+        returns = [None] * self.num_steps
+
+        adv = tensor(np.zeros((self.num_workers, 1)))
+        for i in reversed(range(self.num_steps)):
+            delta = rewards[i] + self.discount * (1 - dones[i]) * values[i + 1] - values[i] # delta ?
+            adv = delta + self.discount * self.gae_tau * (1 - dones[i]) * adv
+            ret = adv + values[i] # TODO: maybe not this
+
+            advantanges[i] = adv.detach()
+            returns[i] = ret.detach()
+
+        return advantanges, returns
 
 
 if __name__ == '__main__':
