@@ -118,7 +118,7 @@ class DACA2CAgent:
                         self.train_logger.info("{cur_steps} {reward}".format(cur_steps=self.cur_steps, reward=cumu_rewd[i]))
                         cumu_rewd[i] = 0
 
-                pi_l = self.get_policy_low(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
+                log_pi_l = self.get_log_pi_l(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
 
                 value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
                 value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
@@ -127,7 +127,7 @@ class DACA2CAgent:
                 dones_cache.append(tensor(done).unsqueeze(-1))
                 pi_h_cache.append(pi_h)
                 log_pi_h_cache.append(pi_h[self.worker_index, options].add(1e-5).log().unsqueeze(-1))
-                log_pi_l_cache.append(pi_l.add(1e-5).log())
+                log_pi_l_cache.append(log_pi_l)
                 value_h_cache.append(value_h)
                 value_l_cache.append(value_l)
 
@@ -246,20 +246,24 @@ class DACA2CAgent:
         loss = policy_loss + value_loss
         return loss
 
-
     def get_policy_high(self, prediction, pre_option, is_init_states):
         master_policy = prediction["master_policy"]
+        is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
+
         mask = torch.zeros_like(master_policy)
         mask[self.worker_index, pre_option] = 1
-        is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
         termination_prob = prediction["beta"]
         return torch.where(is_init_states, master_policy, termination_prob * master_policy + (1 - termination_prob) * mask)
 
-    def get_policy_low(self, options, action, mean, std):
+    def get_log_pi_h(self, pi_h, options):
+        return pi_h.add(1e-5).log().gather(1, options)
+
+    def get_log_pi_l(self, options, action, mean, std):
         options = options.unsqueeze(-1).expand(-1, -1, mean.size(-1))
         mean = mean.gather(1, options).squeeze(1)
         std = std.gather(1, options).squeeze(1)
-        return torch.distributions.Normal(mean, std).log_prob(action).sum(-1).exp().unsqueeze(-1)
+        pi_l = torch.distributions.Normal(mean, std).log_prob(action).sum(-1).exp().unsqueeze(-1)
+        return pi_l.add(1e-5).log()
 
     def compute_adv_return(self, values, rewards, dones):
         advantanges = [None] * self.num_steps

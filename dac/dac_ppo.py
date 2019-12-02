@@ -114,11 +114,6 @@ class DACPPOAgent:
                 std = prediction['std'][self.worker_index, options]
                 actions = torch.distributions.Normal(mean, std).sample()
 
-                pi_l = self.get_policy_low(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
-
-                value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
-                value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
-
                 # print("train action shape {}".format(actions.shape))
                 #next_state, reward, done, info = self.envs.step(actions) # done: terminated
 
@@ -132,6 +127,10 @@ class DACPPOAgent:
                         self.train_logger.info("{cur_steps} {reward}".format(cur_steps=self.cur_steps, reward=cumu_rewd[i]))
                         cumu_rewd[i] = 0
 
+                log_pi_l = self.get_log_pi_l(options.unsqueeze(-1), actions, prediction["mean"], prediction["std"])
+                value_h = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
+                value_l = prediction["q_option"].gather(1, options.unsqueeze(-1))
+
                 rewards_cache.append(tensor(reward).unsqueeze(-1))
                 states_cache.append(tensor(states))
                 dones_cache.append(tensor(done).unsqueeze(-1))
@@ -141,7 +140,7 @@ class DACPPOAgent:
                 init_states_cache.append(self.is_init_states.unsqueeze(-1))
                 pi_h_cache.append(pi_h)
                 log_pi_h_cache.append(pi_h[self.worker_index, options].add(1e-5).log().unsqueeze(-1))
-                log_pi_l_cache.append(pi_l.add(1e-5).log())
+                log_pi_l_cache.append(log_pi_l)
                 value_h_cache.append(value_h)
                 value_l_cache.append(value_l)
                 means_cache.append(prediction["mean"])
@@ -294,9 +293,9 @@ class DACPPOAgent:
 
                 if mdp_type == MdpType.high:
                     cur_pi_h = self.get_policy_high(sample_prediction, sample_prev_options.view(-1), sample_init_states.view(-1))
-                    new_log_pi = self.get_log_pi(mdp_type, cur_pi_h, sample_options, sample_actions, sample_mean, sample_std)
+                    new_log_pi = self.get_log_pi_h(cur_pi_h, sample_options)
                 elif mdp_type == MdpType.low:
-                    new_log_pi = self.get_log_pi(mdp_type, sample_pi_h, sample_options, sample_actions, sample_prediction["mean"], sample_prediction["std"])
+                    new_log_pi = self.get_log_pi_l(sample_options, sample_actions, sample_prediction["mean"], sample_prediction["std"])
                 else:
                     raise NotImplementedError
                 
@@ -332,49 +331,37 @@ class DACPPOAgent:
     def permut_iter(self, *argv):
         batch_size = argv[0].size(0)
         indices = np.asarray(np.random.permutation(np.arange(batch_size)))
-        batches = indices[:batch_size // self.mini_batch_size * self.mini_batch_size].reshape(-1, self.mini_batch_size)
+        batches = indices[:batch_size].reshape(-1, self.mini_batch_size)
         for batch in batches:
             # yield batch
             # print("batch: %s" % batch)
             yield (cache[batch, :] for cache in argv)
-        r = len(indices) % self.mini_batch_size
-        if r:
-            # yield indices[-r:]
-            batch = indices[-r:]
-            # print("batch: %s" % batch)
-            yield (cache[batch, :] for cache in argv)
-
 
     def get_policy_high(self, prediction, pre_option, is_init_states):
         master_policy = prediction["master_policy"]
+        is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
+
         mask = torch.zeros_like(master_policy)
         mask[self.worker_index, pre_option] = 1
-        is_init_states = is_init_states.view(-1, 1).expand(-1, master_policy.size(1))
         termination_prob = prediction["beta"]
         return torch.where(is_init_states, master_policy, termination_prob * master_policy + (1 - termination_prob) * mask)
 
-    def get_policy_low(self, options, action, mean, std):
+    def get_log_pi_h(self, pi_h, options):
+        return pi_h.add(1e-5).log().gather(1, options)
+
+    def get_log_pi_l(self, options, action, mean, std):
         options = options.unsqueeze(-1).expand(-1, -1, mean.size(-1))
         mean = mean.gather(1, options).squeeze(1)
         std = std.gather(1, options).squeeze(1)
-        return torch.distributions.Normal(mean, std).log_prob(action).sum(-1).exp().unsqueeze(-1)
-
-    def get_log_pi(self, mdp_type, pi_h, options, action, mean, std):
-        if mdp_type == MdpType.high:
-            return pi_h.add(1e-5).log().gather(1, options)
-        elif mdp_type == MdpType.low:
-            return self.get_policy_low(options, action, mean, std).add(1e-5).log()
-        else:
-            raise NotImplementedError
+        pi_l = torch.distributions.Normal(mean, std).log_prob(action).sum(-1).exp().unsqueeze(-1)
+        return pi_l.add(1e-5).log()
 
     def compute_adv_return(self, values, rewards, dones):
         advantanges = [None] * self.num_steps
         returns = [None] * self.num_steps
 
-        # ret = values[-1].detach() # TODO: or this
         adv = tensor(np.zeros((self.num_workers, 1)))
         for i in reversed(range(self.num_steps)):
-            # ret = rewards[i] + self.discount * (1 - dones[i]) * ret # TODO: or this
             delta = rewards[i] + self.discount * (1 - dones[i]) * values[i + 1] - values[i] # delta ?
             adv = delta + self.discount * self.gae_tau * (1 - dones[i]) * adv
             ret = adv + values[i] # TODO: maybe not this
