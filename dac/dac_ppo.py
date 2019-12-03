@@ -292,34 +292,37 @@ class DACPPOAgent:
                 sample_prediction = self.dac_net(sample_states)
 
                 if mdp_type == MdpType.high:
-                    cur_pi_h = self.get_policy_high(sample_prediction, sample_prev_options.view(-1), sample_init_states.view(-1))
-                    new_log_pi = self.get_log_pi_h(cur_pi_h, sample_options)
+                    new_log_pi, value = self.get_logpi_value_h(sample_prediction, sample_options, sample_prev_options, sample_init_states, sample_pi_h)
                 elif mdp_type == MdpType.low:
-                    new_log_pi = self.get_log_pi_l(sample_options, sample_actions, sample_prediction["mean"], sample_prediction["std"])
-                else:
-                    raise NotImplementedError
-                
-                if mdp_type == MdpType.high:
-                    value = sample_prediction["q_option"].gather(1, sample_options)
-                elif mdp_type == MdpType.low:
-                    value = (sample_prediction["q_option"] * sample_pi_h).sum(-1).unsqueeze(-1)
+                    new_log_pi, value = self.get_logpi_value_l(sample_prediction, sample_options, sample_actions)
                 else:
                     raise NotImplementedError
                 
                 ratio = (new_log_pi - sample_log_pi).exp() # not use log maybe
-                objective = ratio * sample_advs
-                objective_clipped = ratio.clamp(1.0 - self.ppo_clip_param, 1.0 + self.ppo_clip_param) * sample_advs
+                surr1 = ratio * sample_advs
+                surr2 = ratio.clamp(1.0 - self.ppo_clip_param, 1.0 + self.ppo_clip_param) * sample_advs
 
-                policy_loss = -torch.min(objective, objective_clipped).mean()
-                value_loss = 0.5 * (sample_returns - value).pow(2).mean()
+                actor_loss = -torch.min(surr1, surr2).mean()
+                critic_loss = 0.5 * (sample_returns - value).pow(2).mean()
 
                 # a_h = list(self.dac_net.higher_net.parameters())[0].clone()
                 # a_l = list(self.dac_net.lower_nets.parameters())[0].clone()
 
                 self.opt.zero_grad()
-                (policy_loss + value_loss).backward()
+                (actor_loss + critic_loss).backward()
                 torch.nn.utils.clip_grad_norm_(self.dac_net.parameters(), 0.5)
                 self.opt.step()
+
+    def get_logpi_value_h(self, prediction, options, prev_options, is_init_states, pi_h):
+        cur_pi_h = self.get_policy_high(prediction, prev_options.view(-1), is_init_states.view(-1))
+        log_pi = self.get_log_pi_h(cur_pi_h, options)
+        value = (prediction["q_option"] * pi_h).sum(-1).unsqueeze(-1)
+        return log_pi, value
+
+    def get_logpi_value_l(self, prediction, options, actions):
+        log_pi = self.get_log_pi_l(options, actions, prediction["mean"], prediction["std"])
+        value = prediction["q_option"].gather(1, options)
+        return log_pi, value
 
     def random_iter(self, *argv):
         batch_size = argv[0].size(0)
@@ -362,7 +365,7 @@ class DACPPOAgent:
 
         adv = tensor(np.zeros((self.num_workers, 1)))
         for i in reversed(range(self.num_steps)):
-            delta = rewards[i] + self.discount * (1 - dones[i]) * values[i + 1] - values[i] # delta ?
+            delta = rewards[i] + self.discount * (1 - dones[i]) * values[i + 1] - values[i]
             adv = delta + self.discount * self.gae_tau * (1 - dones[i]) * adv
             ret = adv + values[i] # TODO: maybe not this
 
