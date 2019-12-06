@@ -1,16 +1,6 @@
 # supreme-waffle
 Replicate of the DAC paper.
 
-## Tasks
-| Name         | Task    |
-|--------------|---------|
-| Yan Huang    | A2C     |
-| Cancan Huang | AHP     |
-| Zhe Hu       | DAC     |
-| Zezhi Wang   | PPO     |
-| Ziyao Huang  | GYM     |
-| Yichen Chai  | IOPG\_OC |
-
 ## GCP Configuration + Docker Setup
 1. Open [GCP Setup Note](https://colab.research.google.com/drive/1L5rXPmC-DwbRVXGZkF5pZNNGQfGP6YhB)
 2. Follow instructions to create project and VM instance. You can also check [Screenshots](https://drive.google.com/open?id=1cpV68nUwkHCCgmH70DTOMXMrzUqCqins) for configuration .
